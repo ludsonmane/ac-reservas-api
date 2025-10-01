@@ -1,0 +1,28 @@
+/* web/src/app/globals.css */
+
+:root {
+  /* variáveis recebidas do next/font */
+  --font-alfa: 'Alfa Slab One', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  --font-comfortaa: 'Comfortaa', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+/* texto padrão da UI */
+html, body {
+  font-family: var(--font-comfortaa);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* headings (Mantine <Title> renderiza h1..h6) */
+h1, h2, h3, h4 {
+  font-family: var(--font-alfa);
+  font-weight: 400;            /* Alfa Slab sempre 400 */
+  letter-spacing: -0.01em;     /* fica mais bonito no mobile */
+  line-height: 1.15;
+}
+
+/* opcional: garante que o Mantine não imponha weight diferente */
+.mantine-Title-root {
+  font-weight: 400 !important;
+  font-family: var(--font-alfa) !important;
+}
