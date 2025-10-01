@@ -3,9 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p .",
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
