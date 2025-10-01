@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "start": "next start -p $PORT"
+    "start": "next start -H 0.0.0.0 -p $PORT"
   },
   "dependencies": {
     "@mantine/core": "^8.3.2",
