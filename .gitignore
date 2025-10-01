@@ -1,0 +1,19 @@
+# dependências
+node_modules/
+web/node_modules/
+
+# builds / caches
+.next/
+out/
+dist/
+build/
+.turbo/
+.cache/
+coverage/
+
+# ambientes/temporários
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
