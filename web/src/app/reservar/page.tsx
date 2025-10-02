@@ -363,7 +363,8 @@ export default function ReservarMane() {
               label="3 • Cadastro"
               description="Seus dados básicos"
             />
-            <Stepper.Completed />
+            <Stepper.Completed><></></Stepper.Completed>
+
           </Stepper>
         </Container>
       </Box>
