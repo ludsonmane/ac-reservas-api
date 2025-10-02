@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic';
 import { useMemo, useState } from 'react';
 import {
   Container, Stepper, Group, Button, Title, Text, Card, Grid, Badge,
-  Select, NumberInput, TextInput, Alert, Stack, Box, rem
+  Select, NumberInput, TextInput, Alert, Stack, Box, rem,
 } from '@mantine/core';
 import { DatePickerInput, TimeInput } from '@mantine/dates';
 import {
@@ -19,7 +19,7 @@ import {
   IconUsers,
   IconBabyCarriage,
   IconMail,
-  IconPhone
+  IconPhone,
 } from '@tabler/icons-react';
 import dayjs from 'dayjs';
 import NextImage from 'next/image';
@@ -65,21 +65,18 @@ const FALLBACK_IMG =
 const onlyDigits = (s: string) => s.replace(/\D+/g, '');
 function maskCPF(v: string) {
   const d = onlyDigits(v).slice(0, 11);
-  const p1 = d.slice(0, 3); const p2 = d.slice(3, 6); const p3 = d.slice(6, 9); const p4 = d.slice(9, 11);
+  const p1 = d.slice(0, 3);
+  const p2 = d.slice(3, 6);
+  const p3 = d.slice(6, 9);
+  const p4 = d.slice(9, 11);
   return [p1, p2 && `.${p2}`, p3 && `.${p3}`, p4 && `-${p4}`].filter(Boolean).join('');
 }
 function maskPhone(v: string) {
   const d = onlyDigits(v).slice(0, 11); // 10 ou 11 dígitos no BR
   if (d.length <= 10) {
-    // (99) 9999-9999
-    return d
-      .replace(/^(\d{2})(\d)/, '($1) $2')
-      .replace(/(\d{4})(\d)/, '$1-$2');
+    return d.replace(/^(\d{2})(\d)/, '($1) $2').replace(/(\d{4})(\d)/, '$1-$2');
   }
-  // (99) 99999-9999
-  return d
-    .replace(/^(\d{2})(\d)/, '($1) $2')
-    .replace(/(\d{5})(\d)/, '$1-$2');
+  return d.replace(/^(\d{2})(\d)/, '($1) $2').replace(/(\d{5})(\d)/, '$1-$2');
 }
 function isValidEmail(v: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
@@ -88,7 +85,6 @@ function isValidPhone(v: string) {
   const digits = onlyDigits(v);
   return digits.length === 10 || digits.length === 11;
 }
-
 function joinDateTimeISO(date: Date | null, time: string) {
   if (!date || !time) return null;
   const [hh, mm] = time.split(':').map(Number);
@@ -97,36 +93,46 @@ function joinDateTimeISO(date: Date | null, time: string) {
 }
 
 /** ====== Regras de data/horário ====== */
-const TODAY_START = dayjs().startOf('day').toDate(); // hoje 00:00
-const OPEN_H = 12;   // 12:00
+const TODAY_START = dayjs().startOf('day').toDate();
+const OPEN_H = 12;
 const OPEN_M = 0;
-const CLOSE_H = 20;  // 20:30
+const CLOSE_H = 20;
 const CLOSE_M = 30;
 
 function isTimeOutsideWindow(hhmm: string) {
   if (!hhmm) return false;
   const [hh, mm] = hhmm.split(':').map(Number);
   if (Number.isNaN(hh) || Number.isNaN(mm)) return false;
-
-  // menor que 12:00
   if (hh < OPEN_H) return true;
   if (hh === OPEN_H && mm < OPEN_M) return true;
-
-  // maior que 20:30
   if (hh > CLOSE_H) return true;
   if (hh === CLOSE_H && mm > CLOSE_M) return true;
-
   return false;
 }
-
 function timeWindowMessage() {
   return `Horário disponível entre ${String(OPEN_H).padStart(2, '0')}:${String(OPEN_M).padStart(2, '0')} e ${String(CLOSE_H).padStart(2, '0')}:${String(CLOSE_M).padStart(2, '0')}`;
 }
 
+/* mapeia onChange do Mantine NumberInput (string|number) -> state (number|'') */
+const numberInputHandler =
+  (setter: React.Dispatch<React.SetStateAction<number | ''>>) =>
+  (v: string | number) =>
+    setter(v === '' ? '' : Number(v));
+
 /* ===================== COMPONENTES ===================== */
 function AreaCard({
-  foto, titulo, desc, selected, onSelect,
-}: { foto: string; titulo: string; desc: string; selected: boolean; onSelect: () => void }) {
+  foto,
+  titulo,
+  desc,
+  selected,
+  onSelect,
+}: {
+  foto: string;
+  titulo: string;
+  desc: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
   const [src, setSrc] = useState(foto || FALLBACK_IMG);
 
   return (
@@ -146,7 +152,6 @@ function AreaCard({
       onMouseEnter={(e) => (e.currentTarget.style.transform = 'translateY(-2px)')}
       onMouseLeave={(e) => (e.currentTarget.style.transform = 'translateY(0)')}
     >
-      {/* imagem + overlay */}
       <Box style={{ position: 'relative', height: 160, background: '#f2f2f2' }}>
         <NextImage
           src={src}
@@ -156,7 +161,7 @@ function AreaCard({
           style={{ objectFit: 'cover' }}
           onError={() => setSrc(FALLBACK_IMG)}
           priority={false}
-          unoptimized   // evita configurar domains no next.config
+          unoptimized
         />
         <Box
           style={{
@@ -166,19 +171,19 @@ function AreaCard({
           }}
         />
         {selected && (
-          <Badge
-            color="green"
-            variant="filled"
-            style={{ position: 'absolute', top: 10, right: 10 }}
-          >
+          <Badge color="green" variant="filled" style={{ position: 'absolute', top: 10, right: 10 }}>
             Selecionada
           </Badge>
         )}
       </Box>
 
       <Box p="md">
-        <Title order={4} style={{ margin: 0 }}>{titulo}</Title>
-        <Text size="sm" c="dimmed" mt={4} style={{ lineHeight: 1.35 }}>{desc}</Text>
+        <Title order={4} style={{ margin: 0 }}>
+          {titulo}
+        </Title>
+        <Text size="sm" c="dimmed" mt={4} style={{ lineHeight: 1.35 }}>
+          {desc}
+        </Text>
       </Box>
     </Card>
   );
@@ -224,16 +229,12 @@ export default function ReservarMane() {
   const contactOk = isValidEmail(email) && isValidPhone(phone);
   const canNext1 = Boolean(unidade && data && hora && total > 0 && !timeError && !dateError);
   const canNext2 = Boolean(areaId);
-  const canFinish =
-    fullName.trim().length >= 3 &&
-    onlyDigits(cpf).length === 11 &&
-    contactOk;
+  const canFinish = fullName.trim().length >= 3 && onlyDigits(cpf).length === 11 && contactOk;
 
   async function confirmarReserva() {
     setSending(true);
     setError(null);
     try {
-      // defesas finais
       if (!data || !hora) {
         setError('Selecione data e horário.');
         setStep(0);
@@ -283,7 +284,7 @@ export default function ReservarMane() {
     }
   }
 
-  const area = AREAS.find(a => a.id === areaId);
+  const area = AREAS.find((a) => a.id === areaId);
 
   return (
     <Box style={{ background: '#ffffff', minHeight: '100dvh' }}>
@@ -319,7 +320,7 @@ export default function ReservarMane() {
               fw={400}
               style={{
                 fontFamily: '"Alfa Slab One", system-ui, sans-serif',
-                color: '#146C2E', // verde mais escuro
+                color: '#146C2E',
               }}
             >
               Mané Mercado Reservas
@@ -330,7 +331,7 @@ export default function ReservarMane() {
             </Text>
           </Stack>
 
-          {/* STEPPER com ícones */}
+          {/* STEPPER */}
           <Stepper
             active={step}
             size="md"
@@ -363,8 +364,7 @@ export default function ReservarMane() {
               label="3 • Cadastro"
               description="Seus dados básicos"
             />
-            <Stepper.Completed><></></Stepper.Completed>
-
+            <Stepper.Completed>{/* Mantine v7 exige children */}<></></Stepper.Completed>
           </Stepper>
         </Container>
       </Box>
@@ -389,7 +389,7 @@ export default function ReservarMane() {
                 <Select
                   label="Unidade *"
                   placeholder="Selecione"
-                  data={UNIDADES.map(u => ({ value: u.id, label: u.label }))}
+                  data={UNIDADES.map((u) => ({ value: u.id, label: u.label }))}
                   value={unidade}
                   onChange={setUnidade}
                   withAsterisk
@@ -415,8 +415,7 @@ export default function ReservarMane() {
                       min={1}
                       max={20}
                       value={adultos}
-                      onChange={(value) => setAdultos(value === '' ? '' : Number(value))}
-
+                      onChange={numberInputHandler(setAdultos)}
                       withAsterisk
                       leftSection={<IconUsers size={16} />}
                     />
@@ -427,8 +426,7 @@ export default function ReservarMane() {
                       min={0}
                       max={10}
                       value={criancas}
-                      onChange={(v) => setCriancas(v === '' ? '' : Number(v))}
-
+                      onChange={numberInputHandler(setCriancas)}
                       leftSection={<IconBabyCarriage size={16} />}
                     />
                   </Grid.Col>
@@ -480,8 +478,17 @@ export default function ReservarMane() {
                   <Text size="sm" ta="center">
                     <b>Total:</b> {total} pessoa(s) •{' '}
                     <b>Quando:</b> {data ? dayjs(data).format('DD/MM') : '--'}/{hora || '--:--'}{' '}
-                    {dateError && <Text component="span" c="red">• {dateError}</Text>}
-                    {timeError && <Text component="span" c="red"> • {timeError}</Text>}
+                    {dateError && (
+                      <Text component="span" c="red">
+                        • {dateError}
+                      </Text>
+                    )}
+                    {timeError && (
+                      <Text component="span" c="red">
+                        {' '}
+                        • {timeError}
+                      </Text>
+                    )}
                   </Text>
                 </Card>
               </Stack>
@@ -511,7 +518,14 @@ export default function ReservarMane() {
               <Button variant="light" radius="md" onClick={() => setStep(0)} type="button" style={{ flex: 1 }}>
                 Voltar
               </Button>
-              <Button color="green" radius="md" onClick={() => setStep(2)} disabled={!canNext2} type="button" style={{ flex: 2 }}>
+              <Button
+                color="green"
+                radius="md"
+                onClick={() => setStep(2)}
+                disabled={!canNext2}
+                type="button"
+                style={{ flex: 2 }}
+              >
                 Continuar
               </Button>
             </Group>
@@ -575,18 +589,25 @@ export default function ReservarMane() {
                   valueFormat="DD/MM/YYYY"
                   allowDeselect
                   size="md"
-                  styles={{ input: { height: rem(48) } }}   // mesmo tamanho dos demais
+                  styles={{ input: { height: rem(48) } }}
                   leftSection={<IconCalendar size={16} />}
                 />
               </Stack>
             </Card>
 
-            {error && <Alert color="red" icon={<IconInfoCircle />}>{error}</Alert>}
+            {error && (
+              <Alert color="red" icon={<IconInfoCircle />}>
+                {error}
+              </Alert>
+            )}
 
             <Card withBorder radius="md" p="sm" style={{ background: '#fffdf7' }}>
               <Text size="sm" ta="center">
-                <b>Unidade:</b> {UNIDADES.find(u => u.id === unidade)?.label} • <b>Área:</b> {AREAS.find(a => a.id === areaId)?.nome}<br />
-                <b>Pessoas:</b> {total} • <b>Data/Hora:</b> {data ? dayjs(data).format('DD/MM') : '--'}/{hora || '--:--'}
+                <b>Unidade:</b> {UNIDADES.find((u) => u.id === unidade)?.label} • <b>Área:</b>{' '}
+                {AREAS.find((a) => a.id === areaId)?.nome}
+                <br />
+                <b>Pessoas:</b> {total} • <b>Data/Hora:</b> {data ? dayjs(data).format('DD/MM') : '--'}/
+                {hora || '--:--'}
               </Text>
             </Card>
 
@@ -611,14 +632,7 @@ export default function ReservarMane() {
 
         {/* PASSO 4 */}
         {step === 3 && (
-          <Card
-            withBorder
-            radius="lg"
-            p="xl"
-            shadow="md"
-            mt="sm"
-            style={{ background: '#FBF5E9' }}
-          >
+          <Card withBorder radius="lg" p="xl" shadow="md" mt="sm" style={{ background: '#FBF5E9' }}>
             <Stack gap="xs" align="center">
               <Box
                 aria-hidden
