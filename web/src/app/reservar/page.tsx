@@ -116,8 +116,8 @@ function timeWindowMessage() {
 /* mapeia onChange do Mantine NumberInput (string|number) -> state (number|'') */
 const numberInputHandler =
   (setter: React.Dispatch<React.SetStateAction<number | ''>>) =>
-  (v: string | number) =>
-    setter(v === '' ? '' : Number(v));
+    (v: string | number) =>
+      setter(v === '' ? '' : Number(v));
 
 /* ===================== COMPONENTES ===================== */
 function AreaCard({
@@ -438,8 +438,9 @@ export default function ReservarMane() {
                       label="Data *"
                       value={data}
                       onChange={(v) => {
-                        setData(v);
-                        const invalid = v ? dayjs(v).isBefore(TODAY_START, 'day') : false;
+                        const d = v instanceof Date ? v : null;   // <- garante Date | null
+                        setData(d);
+                        const invalid = d ? dayjs(d).isBefore(TODAY_START, 'day') : false;
                         setDateError(invalid ? 'Selecione uma data a partir de hoje' : null);
                       }}
                       withAsterisk
