@@ -437,9 +437,10 @@ export default function ReservarMane() {
                     <DatePickerInput
                       label="Data *"
                       value={data}
-                      onChange={(v: Date | null) => {
-                        setData(v);
-                        const invalid = v ? dayjs(v).isBefore(TODAY_START, 'day') : false;
+                      onChange={(value) => {
+                        const d = (value as unknown as Date | null); // força compatibilidade de tipos
+                        setData(d);
+                        const invalid = d ? dayjs(d).isBefore(TODAY_START, 'day') : false;
                         setDateError(invalid ? 'Selecione uma data a partir de hoje' : null);
                       }}
                       withAsterisk
@@ -451,6 +452,7 @@ export default function ReservarMane() {
                       styles={{ input: { height: rem(48) } }}
                       error={dateError}
                     />
+
                   </Grid.Col>
 
                   <Grid.Col span={6}>
