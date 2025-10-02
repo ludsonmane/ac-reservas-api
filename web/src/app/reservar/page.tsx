@@ -427,7 +427,8 @@ export default function ReservarMane() {
                       min={0}
                       max={10}
                       value={criancas}
-                      onChange={setCriancas}
+                      onChange={(v) => setCriancas(v === '' ? '' : Number(v))}
+
                       leftSection={<IconBabyCarriage size={16} />}
                     />
                   </Grid.Col>
