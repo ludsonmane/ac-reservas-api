@@ -437,10 +437,9 @@ export default function ReservarMane() {
                     <DatePickerInput
                       label="Data *"
                       value={data}
-                      onChange={(v) => {
-                        const d = v instanceof Date ? v : null;   // <- garante Date | null
-                        setData(d);
-                        const invalid = d ? dayjs(d).isBefore(TODAY_START, 'day') : false;
+                      onChange={(v: Date | null) => {
+                        setData(v);
+                        const invalid = v ? dayjs(v).isBefore(TODAY_START, 'day') : false;
                         setDateError(invalid ? 'Selecione uma data a partir de hoje' : null);
                       }}
                       withAsterisk
