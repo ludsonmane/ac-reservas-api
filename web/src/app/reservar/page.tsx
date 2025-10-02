@@ -415,7 +415,8 @@ export default function ReservarMane() {
                       min={1}
                       max={20}
                       value={adultos}
-                      onChange={setAdultos}
+                      onChange={(value) => setAdultos(value === '' ? '' : Number(value))}
+
                       withAsterisk
                       leftSection={<IconUsers size={16} />}
                     />
