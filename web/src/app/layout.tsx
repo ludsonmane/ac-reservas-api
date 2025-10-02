@@ -36,7 +36,7 @@ const theme = createTheme({
   headings: {
     fontFamily:
       `var(--font-alfa), Alfa Slab One, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`,
-    fontWeight: 400,
+    fontWeight: '400',
     sizes: {
       h1: { fontSize: rem(28), lineHeight: '1.15' },
       h2: { fontSize: rem(24), lineHeight: '1.2' },
