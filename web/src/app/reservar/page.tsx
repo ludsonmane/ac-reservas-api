@@ -587,7 +587,10 @@ export default function ReservarMane() {
                   label="Aniversário (opcional)"
                   placeholder="Selecionar"
                   value={birthday}
-                  onChange={setBirthday}
+                  onChange={(value) => {
+                    const d = (value as unknown) as Date | null; // força o tipo certo
+                    setBirthday(d);
+                  }}
                   valueFormat="DD/MM/YYYY"
                   allowDeselect
                   size="md"
