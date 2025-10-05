@@ -1,0 +1,321 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Mané API",
+    "version": "1.1.0"
+  },
+  "servers": [
+    { "url": "/" }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Healthcheck",
+        "responses": {
+          "200": { "description": "ok" }
+        }
+      }
+    },
+
+    "/v1/reservations": {
+      "get": {
+        "summary": "List reservations",
+        "parameters": [
+          { "in": "query", "name": "page", "schema": { "type": "integer", "minimum": 1 }, "required": false },
+          { "in": "query", "name": "pageSize", "schema": { "type": "integer", "minimum": 1, "maximum": 100 }, "required": false },
+          { "in": "query", "name": "search", "schema": { "type": "string" }, "required": false },
+          { "in": "query", "name": "unit", "schema": { "type": "string" }, "required": false },
+          { "in": "query", "name": "from", "schema": { "type": "string", "format": "date-time" }, "required": false },
+          { "in": "query", "name": "to", "schema": { "type": "string", "format": "date-time" }, "required": false }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReservationListResponse" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create reservation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReservationCreate" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Reservation" }
+              }
+            }
+          },
+          "400": { "description": "bad request" }
+        }
+      }
+    },
+
+    "/v1/reservations/lookup": {
+      "get": {
+        "summary": "Lookup reservation by 6-char code (query)",
+        "parameters": [
+          { "in": "query", "name": "code", "required": true, "schema": { "type": "string", "minLength": 6, "maxLength": 6 } }
+        ],
+        "responses": {
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Reservation" } } } },
+          "400": { "description": "invalid code" },
+          "404": { "description": "not found" }
+        }
+      }
+    },
+
+    "/v1/reservations/code/{code}": {
+      "get": {
+        "summary": "Get reservation by 6-char code (path)",
+        "parameters": [
+          { "in": "path", "name": "code", "required": true, "schema": { "type": "string", "minLength": 6, "maxLength": 6 } }
+        ],
+        "responses": {
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Reservation" } } } },
+          "400": { "description": "invalid code" },
+          "404": { "description": "not found" }
+        }
+      }
+    },
+
+    "/v1/reservations/checkin/{token}": {
+      "get": {
+        "summary": "Check-in by QR token (idempotent)",
+        "parameters": [
+          { "in": "path", "name": "token", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "ok (HTML message)" },
+          "404": { "description": "invalid token" },
+          "410": { "description": "expired token" }
+        }
+      }
+    },
+
+    "/v1/reservations/{id}/status": {
+      "get": {
+        "summary": "Get reservation status",
+        "parameters": [
+          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "checkedInAt": { "type": "string", "format": "date-time", "nullable": true },
+                    "reservationCode": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "description": "not found" }
+        }
+      }
+    },
+
+    "/v1/reservations/{id}/qrcode": {
+      "get": {
+        "summary": "Get reservation QR (PNG)",
+        "parameters": [
+          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "PNG image", "content": { "image/png": { "schema": { "type": "string", "format": "binary" } } } },
+          "404": { "description": "not found" }
+        }
+      }
+    },
+
+    "/v1/reservations/{id}/qr/renew": {
+      "post": {
+        "summary": "Renew QR token",
+        "parameters": [
+          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "id": { "type": "string" },
+                    "qrToken": { "type": "string" },
+                    "qrExpiresAt": { "type": "string", "format": "date-time" },
+                    "status": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "404": { "description": "not found" }
+        }
+      }
+    },
+
+    "/v1/reservations/{id}": {
+      "get": {
+        "summary": "Get reservation by id",
+        "parameters": [
+          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Reservation" } } } },
+          "404": { "description": "not found" }
+        }
+      },
+      "put": {
+        "summary": "Update reservation",
+        "parameters": [
+          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReservationUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Reservation" } } } },
+          "400": { "description": "bad request" },
+          "404": { "description": "not found" }
+        }
+      },
+      "delete": {
+        "summary": "Delete reservation",
+        "parameters": [
+          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "204": { "description": "no content" }
+        }
+      }
+    }
+  },
+
+  "components": {
+    "schemas": {
+      "Reservation": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "reservationCode": { "type": "string" },
+          "fullName": { "type": "string" },
+          "cpf": { "type": "string", "nullable": true },
+          "people": { "type": "integer" },
+          "kids": { "type": "integer" },
+          "area": { "type": "string", "nullable": true },
+          "reservationDate": { "type": "string", "format": "date-time" },
+          "birthdayDate": { "type": "string", "format": "date-time", "nullable": true },
+          "phone": { "type": "string", "nullable": true },
+          "email": { "type": "string", "nullable": true },
+          "notes": { "type": "string", "nullable": true },
+          "utm_source": { "type": "string", "nullable": true },
+          "utm_medium": { "type": "string", "nullable": true },
+          "utm_campaign": { "type": "string", "nullable": true },
+          "utm_content": { "type": "string", "nullable": true },
+          "utm_term": { "type": "string", "nullable": true },
+          "url": { "type": "string", "nullable": true },
+          "ref": { "type": "string", "nullable": true },
+          "unit": { "type": "string", "nullable": true },
+          "source": { "type": "string", "nullable": true },
+          "status": { "type": "string" },
+          "qrToken": { "type": "string" },
+          "qrExpiresAt": { "type": "string", "format": "date-time" },
+          "checkedInAt": { "type": "string", "format": "date-time", "nullable": true },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+
+      "ReservationCreate": {
+        "type": "object",
+        "required": ["fullName", "people", "reservationDate"],
+        "properties": {
+          "fullName": { "type": "string" },
+          "people": { "type": "integer", "minimum": 1 },
+          "kids": { "type": "integer", "minimum": 0 },
+          "area": { "type": "string" },
+          "reservationDate": { "type": "string", "format": "date-time" },
+          "birthdayDate": { "type": "string", "format": "date-time" },
+          "cpf": { "type": "string" },
+          "phone": { "type": "string" },
+          "email": { "type": "string" },
+          "notes": { "type": "string" },
+          "utm_source": { "type": "string" },
+          "utm_medium": { "type": "string" },
+          "utm_campaign": { "type": "string" },
+          "utm_content": { "type": "string" },
+          "utm_term": { "type": "string" },
+          "url": { "type": "string" },
+          "ref": { "type": "string" },
+          "unit": { "type": "string" },
+          "source": { "type": "string" }
+        }
+      },
+
+      "ReservationUpdate": {
+        "type": "object",
+        "properties": {
+          "fullName": { "type": "string" },
+          "people": { "type": "integer", "minimum": 1 },
+          "kids": { "type": "integer", "minimum": 0 },
+          "area": { "type": "string" },
+          "reservationDate": { "type": "string", "format": "date-time" },
+          "birthdayDate": { "type": "string", "format": "date-time" },
+          "cpf": { "type": "string" },
+          "phone": { "type": "string" },
+          "email": { "type": "string" },
+          "notes": { "type": "string" },
+          "utm_source": { "type": "string" },
+          "utm_medium": { "type": "string" },
+          "utm_campaign": { "type": "string" },
+          "utm_content": { "type": "string" },
+          "utm_term": { "type": "string" },
+          "url": { "type": "string" },
+          "ref": { "type": "string" },
+          "unit": { "type": "string" },
+          "source": { "type": "string" },
+          "status": { "type": "string" }
+        }
+      },
+
+      "ReservationListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Reservation" }
+          },
+          "total": { "type": "integer" },
+          "page": { "type": "integer" },
+          "pageSize": { "type": "integer" },
+          "totalPages": { "type": "integer" }
+        }
+      }
+    }
+  }
+}
