@@ -1,27 +1,24 @@
 {
   "name": "mane-api",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "engines": {
     "node": ">=18.18 <23"
   },
   "scripts": {
-    "db:gen": "prisma generate --env-file=.env",
-    "db:migrate": "prisma migrate dev --env-file=.env",
-
     "dev": "ts-node-dev --respawn --transpile-only --files src/index.ts",
 
-    "prebuild": "chmod +x node_modules/.bin/prisma || true && prisma generate --env-file=.env",
-    "build": "tsc -p tsconfig.json",
+    "// local-only helpers": "-----------------------------------------------",
+    "db:gen": "prisma generate",
+    "db:migrate": "prisma migrate dev",
 
+    "// build/start (prod)": "-----------------------------------------------",
+    "build": "prisma generate && tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "start:migrate": "prisma migrate deploy && node dist/index.js",
-
     "prisma:migrate": "prisma migrate deploy",
-    "prisma:studio": "prisma studio",
+    "postinstall": "prisma generate",
 
-    "lint": "echo \"add eslint if you want\"",
-    "postinstall": "echo \"skip prisma generate on postinstall\""
+    "lint": "echo \"add eslint if you want\""
   },
   "dependencies": {
     "@prisma/client": "^6.16.3",
