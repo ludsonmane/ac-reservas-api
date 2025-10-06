@@ -44,8 +44,8 @@ export class PrismaReservationRepository implements ReservationRepository {
         typeof data?.kids === 'number'
           ? data.kids
           : Number.isFinite(Number(data?.kids))
-          ? Number(data.kids)
-          : 0,
+            ? Number(data.kids)
+            : 0,
 
       // normaliza opcionais para null (conforme schema)
       unit: data?.unit ?? null,
@@ -132,11 +132,11 @@ export class PrismaReservationRepository implements ReservationRepository {
 
     if (q) {
       where.OR = [
-        { fullName: { contains: q, mode: 'insensitive' } },
-        { email: { contains: q, mode: 'insensitive' } },
-        { phone: { contains: q, mode: 'insensitive' } },
-        { cpf: { contains: q, mode: 'insensitive' } },
-        { utm_campaign: { contains: q, mode: 'insensitive' } },
+        { fullName: { contains: q } },
+        { email: { contains: q } },
+        { phone: { contains: q } },
+        { cpf: { contains: q } },
+        { utm_campaign: { contains: q } },
         { reservationCode: { contains: q.toUpperCase?.() || q } },
       ];
     }
