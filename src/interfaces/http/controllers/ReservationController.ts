@@ -7,11 +7,12 @@ import { UpdateReservation } from '../../../application/use-cases/UpdateReservat
 import { DeleteReservation } from '../../../application/use-cases/DeleteReservation';
 import { CreateReservationDTO, UpdateReservationDTO } from '../dtos/reservation.dto';
 import { logger } from '../../../config/logger';
+import { sendReservationTicket } from '../../../services/email/sendReservationTicket';
 
-/* ===== Helpers de coerção/sanitização ===== */
-function toInt(v: unknown, fallback: number): number {
+/* ===== Helpers ===== */
+function toInt(v: unknown, fb: number): number {
   const n = Number(v);
-  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+  return Number.isFinite(n) ? Math.trunc(n) : fb;
 }
 function nonEmptyOrNull(v: unknown): string | null {
   const s = typeof v === 'string' ? v.trim() : '';
@@ -39,37 +40,24 @@ export class ReservationController {
 
   /* ================== POST /v1/reservations ================== */
   create = async (req: Request, res: Response) => {
-    // 🔎 LOG 1 — corpo cru que chegou do front
-    logger.debug({ kids: (req.body as any)?.kids, type: typeof (req.body as any)?.kids }, '[CTRL raw]');
-
-    // 1) valida forma geral (Zod)
     const parsed = CreateReservationDTO.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.flatten() });
-    }
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-    // 🔎 LOG 2 — após Zod (antes das coerções finais)
-    logger.debug({ kids: parsed.data.kids, type: typeof parsed.data.kids }, '[CTRL zod]');
-
-    // 2) saneia/coerces finais (kids, datas, utm, trims)
     const b = parsed.data as any;
-
     const payload = {
       fullName: String(b.fullName || '').trim(),
       cpf: nonEmptyOrNull(b.cpf),
       people: toInt(b.people, 1),
-      kids: Math.max(0, toInt(b.kids, 0)), // ✅ número ≥ 0
+      kids: Math.max(0, toInt(b.kids, 0)),
       area: nonEmptyOrNull(b.area),
 
       reservationDate: new Date(b.reservationDate),
       birthdayDate: b.birthdayDate ? dateOrNull(b.birthdayDate) : null,
 
-      // aceita tanto ...contactEmail/Phone quanto email/phone já “planos”
       email: nonEmptyOrNull(b.email ?? b.contactEmail),
       phone: nonEmptyOrNull(b.phone ?? b.contactPhone),
       notes: nonEmptyOrNull(b.notes),
 
-      // somente utm_* (aceitam null)
       utm_source: nonEmptyOrNull(b.utm_source),
       utm_medium: nonEmptyOrNull(b.utm_medium),
       utm_campaign: nonEmptyOrNull(b.utm_campaign),
@@ -82,10 +70,39 @@ export class ReservationController {
       source: nonEmptyOrNull(b.source) ?? 'site',
     };
 
-    // 🔎 LOG 3 — payload final (o que vai para o use-case)
-    logger.debug({ kids: payload.kids, type: typeof payload.kids, payload }, '[CTRL payload]');
-
     const created = await this.createUC.execute(payload as any);
+    const c = created as any; // <- prisma model com email, qrToken, reservationDate, etc.
+
+    // Envia ticket por e-mail sem bloquear a resposta
+    try {
+      if (c.email) {
+        const base = `${req.protocol}://${req.get('host')}`;
+        const checkinUrl = `${base}/v1/reservations/checkin/${encodeURIComponent(c.qrToken)}`;
+
+        const reservationDateIso =
+          c.reservationDate instanceof Date
+            ? c.reservationDate.toISOString()
+            : new Date(c.reservationDate as any).toISOString();
+
+        await sendReservationTicket({
+          id: c.id,
+          fullName: c.fullName,
+          email: c.email,
+          phone: c.phone ?? undefined,
+          people: c.people,
+          unit: c.unit ?? 'Mané Mercado',
+          table: c.table ?? undefined,
+          reservationDate: reservationDateIso,
+          notes: c.notes ?? undefined,
+          checkinUrl,
+        });
+      } else {
+        logger.info({ id: c.id }, '[email] reserva sem e-mail — ticket não enviado');
+      }
+    } catch (err) {
+      logger.warn({ err, id: c.id }, '[email] falha ao enviar ticket (segue 201)');
+    }
+
     return res.status(201).json(created);
   };
 
@@ -125,7 +142,6 @@ export class ReservationController {
     const b = parsed.data as Record<string, any>;
     const payload: Record<string, any> = { ...b };
 
-    // coerces seguros (aplica só se vierem)
     if (b.kids !== undefined) payload.kids = Math.max(0, toInt(b.kids, 0));
     if (b.people !== undefined) payload.people = Math.max(1, toInt(b.people, 1));
     if (b.email !== undefined) payload.email = nonEmptyOrNull(b.email);
@@ -140,11 +156,6 @@ export class ReservationController {
     if (b.utm_campaign !== undefined) payload.utm_campaign = nonEmptyOrNull(b.utm_campaign);
     if (b.utm_content !== undefined) payload.utm_content = nonEmptyOrNull(b.utm_content);
     if (b.utm_term !== undefined) payload.utm_term = nonEmptyOrNull(b.utm_term);
-
-    // 🔎 LOG de update (útil se ajustar kids via painel)
-    if (payload.kids !== undefined) {
-      logger.debug({ kids: payload.kids, type: typeof payload.kids }, '[CTRL update]');
-    }
 
     const updated = await this.updateUC.execute(req.params.id, payload as any);
     return res.json(updated);
