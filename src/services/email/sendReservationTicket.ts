@@ -13,37 +13,38 @@ const envSchema = z.object({
   MAIL_ACCENT_COLOR: z.string().optional().default("#0ea5e9"),
   MAIL_LOGO_BASE64: z.string().optional(),
   MAIL_LOGO_URL: z.string().url().optional(),
+  // base da página pública de consulta
+  MAIL_CONSULT_BASE: z.string().url().optional().default("https://reservas.mane.com.vc"),
 });
 
 const reservationSchema = z.object({
-  id: z.string(),                // id interno (fallback)
-  code: z.string().optional(),   // código de rastreio (preferido)
+  id: z.string(),                              // interno (fallback)
+  reservationCode: z.string().optional(),      // <-- código de rastreio (preferido)
+  code: z.string().optional(),                 // compat (caso venha com outro nome)
   fullName: z.string(),
   email: z.string().email(),
   phone: z.string().optional(),
   people: z.number().int().positive(),
+  kids: z.number().int().nonnegative().optional(), // <-- crianças
   unit: z.string(),
   table: z.string().optional(),
-  reservationDate: z.string(),   // ISO
+  reservationDate: z.string(),                 // ISO
   notes: z.string().optional(),
-  checkinUrl: z.string().url(),  // usamos só a origin para montar /consultar
+  checkinUrl: z.string().url(),                // usado para gerar o QR
 });
 
 export type ReservationTicket = z.infer<typeof reservationSchema>;
 
+/* helpers */
 function toTitle(s?: string | null) {
   if (!s) return "";
-  return s
-    .toLowerCase()
-    .split(/[\s\-]+/)
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
+  return s.toLowerCase().split(/[\s\-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 function formatPhoneBR(p?: string) {
   if (!p) return "";
-  const digits = p.replace(/\D/g, "");
-  if (digits.length === 11) return `(${digits.slice(0,2)}) ${digits.slice(2,7)}-${digits.slice(7)}`;
-  if (digits.length === 10) return `(${digits.slice(0,2)}) ${digits.slice(2,6)}-${digits.slice(6)}`;
+  const d = p.replace(/\D/g, "");
+  if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
   return p;
 }
 
@@ -52,13 +53,13 @@ function buildHtml(
   qrCid: string,
   logoCid: string | null,
   colors: { primary: string; accent: string },
-  consultUrl: string
+  consultUrl: string,
+  codeTxt: string
 ) {
   const date = new Date(ticket.reservationDate);
   const dateFmt = date.toLocaleString("pt-BR", { dateStyle: "full", timeStyle: "short" });
   const unitFmt = toTitle(ticket.unit);
   const phoneFmt = formatPhoneBR(ticket.phone);
-  const codeTxt = ticket.code || ticket.id;
 
   return `
   <div style="background:#f6f7f9;padding:24px 12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;">
@@ -82,6 +83,7 @@ function buildHtml(
           <tr><td style="padding:8px 0;width:140px;color:#334155;"><strong>Unidade:</strong></td><td style="padding:8px 0;">${unitFmt}</td></tr>
           <tr><td style="padding:8px 0;color:#334155;"><strong>Data e hora:</strong></td><td style="padding:8px 0;">${dateFmt}</td></tr>
           <tr><td style="padding:8px 0;color:#334155;"><strong>Pessoas:</strong></td><td style="padding:8px 0;">${ticket.people}</td></tr>
+          ${ticket.kids && ticket.kids > 0 ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Crianças:</strong></td><td style="padding:8px 0;">${ticket.kids}</td></tr>` : ``}
           ${ticket.table ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Mesa:</strong></td><td style="padding:8px 0;">${ticket.table}</td></tr>` : ``}
           ${ticket.phone ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Telefone:</strong></td><td style="padding:8px 0;">${phoneFmt}</td></tr>` : ``}
           ${ticket.notes ? `<tr><td style="padding:8px 0;vertical-align:top;color:#334155;"><strong>Observações:</strong></td><td style="padding:8px 0;">${ticket.notes}</td></tr>` : ``}
@@ -92,7 +94,6 @@ function buildHtml(
           <div style="font-size:12px;color:#64748b;margin-top:8px;">Apresente este QR Code na chegada para check-in.</div>
         </div>
 
-        <!-- Botão apenas para CONSULTAR, sem fazer check-in -->
         <div style="text-align:center;margin:18px 0 8px;">
           <a href="${consultUrl}" style="display:inline-block;background:${colors.accent};color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600;">
             Consultar reserva
@@ -120,28 +121,31 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
     MAIL_ACCENT_COLOR: process.env.MAIL_ACCENT_COLOR,
     MAIL_LOGO_BASE64: process.env.MAIL_LOGO_BASE64,
     MAIL_LOGO_URL: process.env.MAIL_LOGO_URL,
+    MAIL_CONSULT_BASE: process.env.MAIL_CONSULT_BASE,
   });
 
   const ticket = reservationSchema.parse(ticketInput);
   sgMail.setApiKey(env.SENDGRID_API_KEY);
+
+  // Código preferido = reservationCode; fallback = code; por fim, id
+  const codeTxt = ticket.reservationCode || ticket.code || ticket.id;
+
+  // URL pública fixa para consulta
+  const baseConsult = env.MAIL_CONSULT_BASE.replace(/\/$/, "");
+  const consultUrl = `${baseConsult}/consultar?codigo=${encodeURIComponent(codeTxt)}`;
 
   // QR inline
   const qrPng = await QRCode.toBuffer(ticket.checkinUrl, { errorCorrectionLevel: "M", margin: 1, width: 600 });
   const qrCid = "qrTicket";
   const logoCid = env.MAIL_LOGO_BASE64 || env.MAIL_LOGO_URL ? "logoCid" : null;
 
-  // Deriva a origem a partir do checkinUrl e monta /consultar?codigo=...
-  const origin = new URL(ticket.checkinUrl).origin;
-  const codeTxt = ticket.code || ticket.id;
-  const consultUrl = `${origin}/consultar?codigo=${encodeURIComponent(codeTxt)}`;
-
-  // HTML + texto
-  const html = buildHtml(ticket, qrCid, logoCid, { primary: env.MAIL_PRIMARY_COLOR, accent: env.MAIL_ACCENT_COLOR }, consultUrl);
+  const html = buildHtml(ticket, qrCid, logoCid, { primary: env.MAIL_PRIMARY_COLOR, accent: env.MAIL_ACCENT_COLOR }, consultUrl, codeTxt);
   const text = [
     `Sua reserva foi confirmada — ${toTitle(ticket.unit)}`,
     `Código: ${codeTxt}`,
     `Data/hora: ${new Date(ticket.reservationDate).toLocaleString("pt-BR")}`,
     `Pessoas: ${ticket.people}`,
+    ticket.kids && ticket.kids > 0 ? `Crianças: ${ticket.kids}` : "",
     ticket.table ? `Mesa: ${ticket.table}` : "",
     ticket.phone ? `Telefone: ${formatPhoneBR(ticket.phone)}` : "",
     ticket.notes ? `Obs: ${ticket.notes}` : "",
@@ -172,7 +176,7 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
     from: { email: env.MAIL_FROM, name: env.MAIL_FROM_NAME },
     ...(env.MAIL_REPLY_TO ? { reply_to: { email: env.MAIL_REPLY_TO } } : {}),
     ...(env.MAIL_BCC ? { bcc: env.MAIL_BCC } : {}),
-    subject: `Sua reserva confirmada • ${toTitle(ticket.unit)} • #${codeTxt}`, // <- usa o código de rastreio
+    subject: `Sua reserva confirmada • ${toTitle(ticket.unit)} • #${codeTxt}`, // usa reservationCode
     content: [
       { type: "text/plain", value: text },
       { type: "text/html", value: html },
