@@ -7,6 +7,9 @@ const envSchema = z.object({
   SENDGRID_API_KEY: z.string().min(10),
   MAIL_FROM: z.string().email(),
   MAIL_FROM_NAME: z.string().optional().default("Mané Mercado"),
+  // opcionais
+  MAIL_REPLY_TO: z.string().email().optional(),
+  MAIL_BCC: z.string().email().optional(), // ex.: auditoria interna
 });
 
 const reservationSchema = z.object({
@@ -15,11 +18,11 @@ const reservationSchema = z.object({
   email: z.string().email(),
   phone: z.string().optional(),
   people: z.number().int().positive(),
-  unit: z.string(), // "Águas Claras", "Brasília", etc.
+  unit: z.string(),
   table: z.string().optional(),
-  reservationDate: z.string(), // ISO "2025-10-07T20:00:00-03:00"
+  reservationDate: z.string(), // ISO
   notes: z.string().optional(),
-  checkinUrl: z.string().url(), // link a ser codificado no QR
+  checkinUrl: z.string().url(),
 });
 
 export type ReservationTicket = z.infer<typeof reservationSchema>;
@@ -41,40 +44,17 @@ function buildHtml(ticket: ReservationTicket, qrCid: string) {
     <div style="padding:16px;">
       <p>Olá, <strong>${ticket.fullName}</strong>! Sua reserva foi confirmada.</p>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-        <tr>
-          <td style="padding:8px 0;"><strong>Unidade:</strong></td>
-          <td style="padding:8px 0;">${ticket.unit}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;"><strong>Data e hora:</strong></td>
-          <td style="padding:8px 0;">${dateFmt}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;"><strong>Pessoas:</strong></td>
-          <td style="padding:8px 0;">${ticket.people}</td>
-        </tr>
-        ${ticket.table ? `
-        <tr>
-          <td style="padding:8px 0;"><strong>Mesa:</strong></td>
-          <td style="padding:8px 0;">${ticket.table}</td>
-        </tr>` : ``}
-        ${ticket.phone ? `
-        <tr>
-          <td style="padding:8px 0;"><strong>Telefone:</strong></td>
-          <td style="padding:8px 0;">${ticket.phone}</td>
-        </tr>` : ``}
-        ${ticket.notes ? `
-        <tr>
-          <td style="padding:8px 0; vertical-align:top;"><strong>Observações:</strong></td>
-          <td style="padding:8px 0;">${ticket.notes}</td>
-        </tr>` : ``}
+        <tr><td style="padding:8px 0;"><strong>Unidade:</strong></td><td style="padding:8px 0;">${ticket.unit}</td></tr>
+        <tr><td style="padding:8px 0;"><strong>Data e hora:</strong></td><td style="padding:8px 0;">${dateFmt}</td></tr>
+        <tr><td style="padding:8px 0;"><strong>Pessoas:</strong></td><td style="padding:8px 0;">${ticket.people}</td></tr>
+        ${ticket.table ? `<tr><td style="padding:8px 0;"><strong>Mesa:</strong></td><td style="padding:8px 0;">${ticket.table}</td></tr>` : ``}
+        ${ticket.phone ? `<tr><td style="padding:8px 0;"><strong>Telefone:</strong></td><td style="padding:8px 0;">${ticket.phone}</td></tr>` : ``}
+        ${ticket.notes ? `<tr><td style="padding:8px 0; vertical-align:top;"><strong>Observações:</strong></td><td style="padding:8px 0;">${ticket.notes}</td></tr>` : ``}
       </table>
 
       <div style="margin:18px 0; text-align:center;">
         <img src="cid:${qrCid}" alt="QR Code da reserva" style="width:200px; height:200px;" />
-        <div style="font-size:12px; color:#64748b; margin-top:6px;">
-          Apresente este QR Code na chegada para check-in.
-        </div>
+        <div style="font-size:12px; color:#64748b; margin-top:6px;">Apresente este QR Code na chegada para check-in.</div>
       </div>
 
       <a href="${ticket.checkinUrl}" style="display:inline-block; background:#0ea5e9; color:#fff; text-decoration:none; padding:10px 16px; border-radius:8px;">
@@ -97,13 +77,15 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
     SENDGRID_API_KEY: process.env.SENDGRID_API_KEY,
     MAIL_FROM: process.env.MAIL_FROM,
     MAIL_FROM_NAME: process.env.MAIL_FROM_NAME,
+    MAIL_REPLY_TO: process.env.MAIL_REPLY_TO,
+    MAIL_BCC: process.env.MAIL_BCC,
   });
 
   const ticket = reservationSchema.parse(ticketInput);
 
   sgMail.setApiKey(env.SENDGRID_API_KEY);
 
-  // Gera QR como PNG (Buffer) para anexar inline via CID
+  // QR como PNG (Buffer) para inline via CID
   const qrPng = await QRCode.toBuffer(ticket.checkinUrl, {
     errorCorrectionLevel: "M",
     margin: 1,
@@ -124,10 +106,11 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
     `Apresente o QR Code do anexo na chegada.`,
   ].filter(Boolean).join("\n");
 
-  // v8: usar content[] em vez de html/text diretos
+  // payload v8
   const msg = {
     to: ticket.email,
     from: { email: env.MAIL_FROM, name: env.MAIL_FROM_NAME },
+    ...(env.MAIL_REPLY_TO ? { reply_to: { email: env.MAIL_REPLY_TO } } : {}),
     subject: `Sua reserva • ${ticket.unit} • #${ticket.id}`,
     content: [
       { type: "text/plain", value: text },
@@ -142,13 +125,28 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
         content_id: qrCid,
       },
     ],
+    ...(env.MAIL_BCC ? { bcc: env.MAIL_BCC } : {}),
     categories: ["reservas", "ticket"],
-    headers: {
-      "X-Reservation-Id": ticket.id,
+    headers: { "X-Reservation-Id": ticket.id },
+
+    // garante que não está em sandbox e liga rastreio básico
+    mailSettings: {
+      sandboxMode: { enable: false },
+    },
+    trackingSettings: {
+      clickTracking: { enable: true, enableText: false },
+      openTracking: { enable: true },
     },
   } as const;
 
-  // Tipos da v8 são mais estritos; convertemos via unknown para MailDataRequired
-  const [resp] = await sgMail.send(msg as unknown as sgMail.MailDataRequired, false);
-  return { status: resp.statusCode };
+  try {
+    const [resp] = await sgMail.send(msg as unknown as sgMail.MailDataRequired, false);
+    return { status: resp?.statusCode ?? 0 };
+  } catch (e: any) {
+    // expõe mensagem útil do SendGrid sem vazar segredos
+    const sg = e?.response?.body;
+    const errMsg = sg?.errors?.length ? JSON.stringify(sg.errors) : String(e?.message || e);
+    // re-lança p/ quem chama decidir (controller já faz try/catch)
+    throw new Error(`SENDGRID_ERROR ${errMsg}`);
+  }
 }
