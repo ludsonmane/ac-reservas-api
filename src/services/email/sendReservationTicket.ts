@@ -1,3 +1,4 @@
+// src/services/email/sendReservationTicket.ts
 import sgMail from "@sendgrid/mail";
 import { z } from "zod";
 import QRCode from "qrcode";
@@ -18,8 +19,7 @@ const reservationSchema = z.object({
   table: z.string().optional(),
   reservationDate: z.string(), // ISO "2025-10-07T20:00:00-03:00"
   notes: z.string().optional(),
-  // link que será codificado no QR (ex: página de confirmação/check-in)
-  checkinUrl: z.string().url(),
+  checkinUrl: z.string().url(), // link a ser codificado no QR
 });
 
 export type ReservationTicket = z.infer<typeof reservationSchema>;
@@ -111,22 +111,28 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
   });
   const qrCid = "qrTicket";
 
+  const html = buildHtml(ticket, qrCid);
+  const text = [
+    `Reserva confirmada — ${ticket.unit}`,
+    `Código: ${ticket.id}`,
+    `Data/hora: ${new Date(ticket.reservationDate).toLocaleString("pt-BR")}`,
+    `Pessoas: ${ticket.people}`,
+    ticket.table ? `Mesa: ${ticket.table}` : "",
+    ticket.notes ? `Obs: ${ticket.notes}` : "",
+    `Check-in/Confirmação: ${ticket.checkinUrl}`,
+    ``,
+    `Apresente o QR Code do anexo na chegada.`,
+  ].filter(Boolean).join("\n");
+
+  // v8: usar content[] em vez de html/text diretos
   const msg = {
     to: ticket.email,
     from: { email: env.MAIL_FROM, name: env.MAIL_FROM_NAME },
     subject: `Sua reserva • ${ticket.unit} • #${ticket.id}`,
-    html: buildHtml(ticket, qrCid),
-    text: [
-      `Reserva confirmada — ${ticket.unit}`,
-      `Código: ${ticket.id}`,
-      `Data/hora: ${new Date(ticket.reservationDate).toLocaleString("pt-BR")}`,
-      `Pessoas: ${ticket.people}`,
-      ticket.table ? `Mesa: ${ticket.table}` : "",
-      ticket.notes ? `Obs: ${ticket.notes}` : "",
-      `Check-in/Confirmação: ${ticket.checkinUrl}`,
-      ``,
-      `Apresente o QR Code do anexo na chegada.`,
-    ].filter(Boolean).join("\n"),
+    content: [
+      { type: "text/plain", value: text },
+      { type: "text/html", value: html },
+    ],
     attachments: [
       {
         content: qrPng.toString("base64"),
@@ -138,11 +144,11 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
     ],
     categories: ["reservas", "ticket"],
     headers: {
-      // ajuda em tracing/idempotência se você reenviar
       "X-Reservation-Id": ticket.id,
     },
-  } as sgMail.MailDataRequired;
+  } as const;
 
-  const [resp] = await sgMail.send(msg, /* isMultiple */ false);
+  // Tipos da v8 são mais estritos; convertemos via unknown para MailDataRequired
+  const [resp] = await sgMail.send(msg as unknown as sgMail.MailDataRequired, false);
   return { status: resp.statusCode };
 }
