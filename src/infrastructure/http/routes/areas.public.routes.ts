@@ -6,15 +6,24 @@ const router = Router();
 
 /**
  * GET /v1/areas/public/by-unit/:unitId
- * Query: ?date=YYYY-MM-DD (opcional; default = hoje)
- * Retorna: [{ id, name, capacity, available, isAvailable }]
+ * Query:
+ *   - date=YYYY-MM-DD (opcional; se vazio, service decide o default)
+ *   - time=HH:mm      (opcional; usado para calcular o período e disponibilidade)
+ *
+ * Retorna: [{ id, name, capacity, available, isAvailable, ... }]
  */
 router.get('/by-unit/:unitId', async (req, res, next) => {
   try {
-    const unitId = String(req.params.unitId || '');
-    const date = String(req.query.date || '');
-    const items = await areasService.listByUnitPublic(unitId, date || undefined);
-    res.json(items);
+    const unitId = String(req.params.unitId || '').trim();
+    const date = (req.query.date ? String(req.query.date) : '').trim();
+    const time = (req.query.time ? String(req.query.time) : '').trim() || undefined;
+
+    if (!unitId) {
+      return res.status(400).json({ error: { message: 'unitId é obrigatório' } });
+    }
+
+    const items = await areasService.listByUnitPublic(unitId, date || undefined, time);
+    return res.json(items);
   } catch (err) {
     next(err);
   }

@@ -43,29 +43,43 @@ function toHHmm(dateISO: string | Date): string {
   return dayjs(d).format('HH:mm');
 }
 
+// 🔧 resolve de unidade sem usar `mode`, com fallbacks JS
 async function resolveUnit(input: { unitId?: string | null; unit?: string | null }) {
-  // Preferir unitId se vier:
+  // 1) Preferir unitId se vier
   if (input.unitId) {
     const u = await prisma.unit.findUnique({ where: { id: String(input.unitId) } });
     if (u) return { unitId: u.id, unitName: u.name };
   }
-  // Tentar pelo nome/slug legado se vier "unit"
+
   const raw = (input.unit || '').trim();
   if (raw) {
-    // busca por slug exato ou nome case-insensitive
-    const u = await prisma.unit.findFirst({
-      where: {
-        OR: [
-          { slug: raw },
-          { name: { equals: raw, mode: 'insensitive' } },
-        ],
-      },
-    });
+    // 2) tentar slug exato (slug é minúsculo geralmente)
+    const guessSlug = raw.toLowerCase();
+    let u =
+      (await prisma.unit.findUnique({
+        where: { slug: guessSlug },
+      })) ||
+      // 3) tentar contains em name (sensível ao caso do DB)
+      (await prisma.unit.findFirst({
+        where: { name: { contains: raw } },
+      }));
+
+    // 4) fallback: carrega todas e compara case-insensitive em JS
+    if (!u) {
+      const all = await prisma.unit.findMany({ select: { id: true, name: true, slug: true } });
+      const lowered = raw.toLowerCase();
+      u =
+        all.find((x) => x.slug?.toLowerCase() === lowered) ||
+        all.find((x) => x.name.toLowerCase() === lowered) ||
+        all.find((x) => x.name.toLowerCase().includes(lowered));
+    }
+
     if (u) return { unitId: u.id, unitName: u.name };
   }
   return { unitId: null as string | null, unitName: null as string | null };
 }
 
+// 🔧 resolve de área sem `mode`, com fallbacks JS e atrelada à unit
 async function resolveArea(input: { areaId?: string | null; area?: string | null; unitId?: string | null }) {
   if (input.areaId) {
     const a = await prisma.area.findUnique({ where: { id: String(input.areaId) } });
@@ -73,12 +87,30 @@ async function resolveArea(input: { areaId?: string | null; area?: string | null
   }
   const raw = (input.area || '').trim();
   if (raw && input.unitId) {
-    const a = await prisma.area.findFirst({
-      where: {
-        unitId: String(input.unitId),
-        name: { equals: raw, mode: 'insensitive' },
-      },
-    });
+    // 1) exato em name + unitId
+    let a =
+      (await prisma.area.findFirst({
+        where: { unitId: String(input.unitId), name: raw },
+      })) ||
+      // 2) contains (sensível ao caso do DB)
+      (await prisma.area.findFirst({
+        where: { unitId: String(input.unitId), name: { contains: raw } },
+      }));
+
+    // 3) fallback: carregar áreas da unidade e comparar case-insensitive em JS
+    if (!a) {
+      const all = await prisma.area.findMany({
+        where: { unitId: String(input.unitId) },
+        select: { id: true, name: true },
+      });
+      const lowered = raw.toLowerCase();
+      a =
+        all.find((x) => x.name.toLowerCase() === lowered) ||
+        all.find((x) => x.name.toLowerCase().includes(lowered)) ||
+        null;
+      if (a) return { areaId: a.id, areaName: a.name };
+    }
+
     if (a) return { areaId: a.id, areaName: a.name };
   }
   return { areaId: null as string | null, areaName: null as string | null };
@@ -123,10 +155,10 @@ async function enrichAndValidate(req: any, res: any, next: any) {
 
       // Busca disponibilidade da unidade no dia/horário (período)
       const list = await areasService.listByUnitPublic(String(unitId), ymd, hhmm);
-      const found = list.find(a => a.id === areaId);
+      const found = list.find((a: any) => a.id === areaId);
       if (!found) {
         return res.status(400).json({
-          error: { code: 'AREA_NOT_FOUND', message: 'Área não encontrada/ativa para a unidade selecionada.' }
+          error: { code: 'AREA_NOT_FOUND', message: 'Área não encontrada/ativa para a unidade selecionada.' },
         });
       }
 
@@ -143,8 +175,6 @@ async function enrichAndValidate(req: any, res: any, next: any) {
             const sameArea = String(prev.areaId || '') === String(areaId || '');
             const sameUnit = String(prev.unitId || '') === String(unitId || '');
             const sameDay = toYMD(prev.reservationDate) === ymd;
-
-            // Mesma “janela” de capacidade? (mesmo dia e mesmo período)
             const samePeriod = toHHmm(prev.reservationDate) === hhmm;
 
             if (sameUnit && sameArea && sameDay && samePeriod) {
@@ -153,7 +183,9 @@ async function enrichAndValidate(req: any, res: any, next: any) {
             }
           }
         }
-      } catch { /* se falhar, seguimos com crédito 0 */ }
+      } catch {
+        /* ok */
+      }
 
       // Agora a régua é: totalNovo <= available + creditoAtual
       if (totalNovo > available + creditoAtual) {
@@ -183,12 +215,10 @@ async function enrichAndValidate(req: any, res: any, next: any) {
 function sanitizeStaffBody(req: any, _res: any, next: any) {
   const role = req.user?.role;
   if (role && role !== 'ADMIN') {
-    // remove campos proibidos para edição por concierge
     if (req.body) {
       delete req.body.utm_source;
       delete req.body.utm_campaign;
       delete req.body.source;
-      // se vierem em snake-case por algum motivo:
       delete req.body.utmSource;
       delete req.body.utmCampaign;
     }
@@ -256,7 +286,7 @@ reservationsRouter.get('/units', async (_req, res) => {
     orderBy: { name: 'asc' },
     select: { name: true },
   });
-  res.json(units.map(u => u.name));
+  res.json(units.map((u) => u.name));
 });
 
 /**
@@ -269,7 +299,7 @@ reservationsRouter.get('/areas', async (_req, res) => {
     where: { area: { not: null } },
   });
   const list = groups
-    .map(g => g.area!)
+    .map((g) => g.area!)
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b, 'pt-BR'));
   res.json(list);
@@ -278,7 +308,6 @@ reservationsRouter.get('/areas', async (_req, res) => {
 /**
  * ⚠️ Check-in via GET por token (NÃO altera estado).
  * GET /v1/reservations/checkin/:token
- * (pública) — exibe instrução para confirmar no painel autenticado.
  */
 reservationsRouter.get('/checkin/:token', async (req, res) => {
   const token = req.params.token;
@@ -289,7 +318,6 @@ reservationsRouter.get('/checkin/:token', async (req, res) => {
     return res.status(410).send('<h2>QR expirado</h2>');
   }
 
-  // Não faz mais o check-in automaticamente:
   res
     .status(200)
     .send('<h2>Abra o painel do Admin, faça login e confirme o check-in desta reserva.</h2>');
@@ -312,35 +340,25 @@ reservationsRouter.get('/:id/status', async (req, res) => {
 /**
  * QR code PNG do check-in (imagem)
  * GET /v1/reservations/:id/qrcode
- *
- * Agora o QR aponta para a UI: {ADMIN_APP_BASE_URL}/checkin?id=<id>
- * Se ADMIN_APP_BASE_URL não estiver setada, faz fallback para a URL antiga do backend.
  */
 reservationsRouter.get('/:id/qrcode', async (req, res) => {
   const id = req.params.id;
   const r = await prisma.reservation.findUnique({ where: { id } });
   if (!r) return res.sendStatus(404);
 
-  // Base do app admin (onde a UI roda)
   const adminBase = (process.env.ADMIN_APP_BASE_URL || '').trim().replace(/\/+$/, '');
-  // Fallback (mantém compat) caso a env não esteja configurada
   const apiBase = `${req.protocol}://${req.get('host')}`;
 
-  // Preferimos abrir a tela da UI com ?id=<reservationId>
   const checkinUiUrl = adminBase
     ? `${adminBase}/checkin?id=${encodeURIComponent(r.id)}`
-    // fallback antigo (GET público não muta status, só instrução)
     : `${apiBase}/v1/reservations/checkin/${encodeURIComponent(r.qrToken)}`;
 
   try {
     const png = await QRCode.toBuffer(checkinUiUrl, { width: 384, margin: 2 });
-
-    // Permitir embed cross-origin
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-
     res.send(png);
   } catch {
     res.status(500).json({ error: { code: 'QR_ERROR', message: 'Failed to generate QR' } });
@@ -359,10 +377,6 @@ function computeQrExpiry(): Date {
   return dayjs().add(ttlHours, 'hour').toDate();
 }
 
-/**
- * POST /v1/reservations/:id/qr/renew
- * Gera novo QR (token/expiração), reseta status para AWAITING_CHECKIN e limpa checkedInAt.
- */
 reservationsRouter.post(
   '/:id/qr/renew',
   requireAuth,
@@ -402,10 +416,6 @@ reservationsRouter.post(
   }
 );
 
-/**
- * POST /v1/reservations/code/:code/qr/renew
- * Variante por código curto (A-Z/0-9, 6 chars).
- */
 reservationsRouter.post(
   '/code/:code/qr/renew',
   requireAuth,
@@ -448,11 +458,6 @@ reservationsRouter.post(
   }
 );
 
-/**
- * PUT /v1/reservations/:id/status
- * Body: { status: string, renewQr?: boolean }
- * Altera status; se renewQr=true, também gira novo QR e limpa checkedInAt.
- */
 reservationsRouter.put(
   '/:id/status',
   requireAuth,
@@ -499,10 +504,6 @@ reservationsRouter.put(
    ✅ Check-in autenticado (por ID e por token)
    ========================================================================= */
 
-/**
- * POST /v1/reservations/:id/checkin
- * Requer login + STAFF/ADMIN. Idempotente: se já checado, 409.
- */
 reservationsRouter.post(
   '/:id/checkin',
   requireAuth,
@@ -523,15 +524,14 @@ reservationsRouter.post(
         data: {
           status: 'CHECKED_IN',
           checkedInAt: new Date(),
-          // checkedByUserId: req.user?.id, // habilite se o campo existir no schema
         },
         select: {
           id: true,
           reservationCode: true,
           status: true,
           checkedInAt: true,
-          fullName: true, // <- ajustado
-          phone: true,    // <- ajustado
+          fullName: true,
+          phone: true,
           people: true,
           unitId: true,
           areaId: true,
@@ -546,11 +546,6 @@ reservationsRouter.post(
   }
 );
 
-/**
- * POST /v1/reservations/checkin/by-token
- * body: { token }
- * Requer login + STAFF/ADMIN. Idempotente: se já checado, 409.
- */
 reservationsRouter.post(
   '/checkin/by-token',
   requireAuth,
@@ -576,15 +571,14 @@ reservationsRouter.post(
         data: {
           status: 'CHECKED_IN',
           checkedInAt: new Date(),
-          // checkedByUserId: req.user?.id, // habilite se o campo existir no schema
         },
         select: {
           id: true,
           reservationCode: true,
           status: true,
           checkedInAt: true,
-          fullName: true, // <- ajustado
-          phone: true,    // <- ajustado
+          fullName: true,
+          phone: true,
           people: true,
           unitId: true,
           areaId: true,
@@ -603,7 +597,6 @@ reservationsRouter.post(
    CRUD (Controller) — com enrich/validate no CREATE/UPDATE
    ========================================================================= */
 
-// CREATE (interna): STAFF e ADMIN podem, mas STAFF não consegue alterar OTM/Source
 reservationsRouter.post(
   '/',
   requireAuth,
@@ -613,23 +606,10 @@ reservationsRouter.post(
   controller.create
 );
 
-// LIST (privada): STAFF e ADMIN
-reservationsRouter.get(
-  '/',
-  requireAuth,
-  requireRole(['STAFF', 'ADMIN']),
-  controller.list
-);
+reservationsRouter.get('/', requireAuth, requireRole(['STAFF', 'ADMIN']), controller.list);
 
-// GET by id (privada): STAFF e ADMIN
-reservationsRouter.get(
-  '/:id',
-  requireAuth,
-  requireRole(['STAFF', 'ADMIN']),
-  controller.getById
-);
+reservationsRouter.get('/:id', requireAuth, requireRole(['STAFF', 'ADMIN']), controller.getById);
 
-// UPDATE (privada): STAFF e ADMIN, mas STAFF não edita UTM/Source
 reservationsRouter.put(
   '/:id',
   requireAuth,
@@ -639,10 +619,4 @@ reservationsRouter.put(
   controller.update
 );
 
-// DELETE (privada): apenas ADMIN
-reservationsRouter.delete(
-  '/:id',
-  requireAuth,
-  requireRole(['ADMIN']),
-  controller.delete
-);
+reservationsRouter.delete('/:id', requireAuth, requireRole(['ADMIN']), controller.delete);
