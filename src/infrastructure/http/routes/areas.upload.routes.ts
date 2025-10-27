@@ -51,14 +51,15 @@ areasUploadRouter.post(
   upload.single('file'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { id } = req.params;
-      if (!req.file) {
+    const { id } = req.params;
+     const file = (req as any).file as { filename: string } | undefined;
+     if (!file) {
         return res.status(400).json({ error: { message: 'Arquivo não enviado (campo "file")' } });
       }
 
       // Monta URL pública (certifique-se de servir /uploads como estático no app)
       const publicBase = `${req.protocol}://${req.get('host')}`.replace(/\/+$/, '');
-      const relPath = `uploads/areas/${req.file.filename}`;
+      const relPath = `uploads/areas/${file.filename}`;
       const photoUrl = `${publicBase}/${relPath}`;
 
       const updated = await prisma.area.update({

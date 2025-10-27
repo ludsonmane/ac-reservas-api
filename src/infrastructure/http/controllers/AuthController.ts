@@ -2,7 +2,8 @@
 import { Request, Response } from 'express';
 import argon2 from 'argon2';
 import { signAccessToken } from '../../../config/jwt';
-import type { LoginDto, AuthResponseDto } from '../dtos/auth.dto';
+import type { AuthResponseDto } from '../dtos/auth.dto';
+import { LoginSchema } from '../dtos/auth.dto';
 
 import { prisma } from '../../../infrastructure/db/prisma'; // usa a instância compartilhada
 
@@ -13,7 +14,7 @@ export class AuthController {
    */
   static async login(req: Request, res: Response) {
     try {
-      const parsed = LoginDto.safeParse(req.body);
+      const parsed = LoginSchema.safeParse(req.body);
       if (!parsed.success) {
         return res
           .status(400)

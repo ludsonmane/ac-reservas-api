@@ -71,7 +71,8 @@ async function resolveUnit(input: { unitId?: string | null; unit?: string | null
       u =
         all.find((x) => x.slug?.toLowerCase() === lowered) ||
         all.find((x) => x.name.toLowerCase() === lowered) ||
-        all.find((x) => x.name.toLowerCase().includes(lowered));
+        all.find((x) => x.name.toLowerCase().includes(lowered)) ||
+        null;
     }
 
     if (u) return { unitId: u.id, unitName: u.name };
