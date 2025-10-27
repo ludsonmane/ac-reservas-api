@@ -11,15 +11,25 @@
   },
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only --files src/index.ts",
+
     "// local-only helpers": "------------------------------------------------",
     "db:gen": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
+
+    "// CI/Buildpack compat (Railway)": "--------------------------------------",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+
     "// build/start (prod)": "------------------------------------------------",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "lint": "echo \"add eslint if you want\""
+    "lint": "echo \"add eslint if you want\"",
+
+    "// optional: ensure prisma client on install": "---------------------------",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^6.16.3",
