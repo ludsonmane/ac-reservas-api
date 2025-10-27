@@ -19,6 +19,11 @@ import { requireAuth, requireRole } from '../middlewares/requireAuth';
 // ⬇️ disponibilidade de áreas
 import { areasService } from '../../../modules/areas/areas.service';
 
+export const reservationsRouter = Router();
+
+/* =========================================================================
+   Repo/Controller
+   ========================================================================= */
 const repo = new PrismaReservationRepository();
 const controller = new ReservationController(
   new CreateReservation(repo),
@@ -28,11 +33,12 @@ const controller = new ReservationController(
   new DeleteReservation(repo)
 );
 
-export const reservationsRouter = Router();
-
 /* =========================================================================
    Helpers
    ========================================================================= */
+
+type UnitMin = { id: string; name: string; slug: string };
+type AreaMin = { id: string; name: string };
 
 function toYMD(dateISO: string | Date): string {
   const d = typeof dateISO === 'string' ? new Date(dateISO) : dateISO;
@@ -43,11 +49,23 @@ function toHHmm(dateISO: string | Date): string {
   return dayjs(d).format('HH:mm');
 }
 
-// 🔧 resolve de unidade sem usar `mode`, com fallbacks JS
+/** Gera um novo token de QR (hex 32 chars) */
+function newQrToken() {
+  return crypto.randomBytes(16).toString('hex');
+}
+function computeQrExpiry(): Date {
+  const ttlHours = Number(process.env.QR_TTL_HOURS || 24);
+  return dayjs().add(ttlHours, 'hour').toDate();
+}
+
+// 🔧 resolve de unidade sem usar `mode`, com SELECT padronizado e fallbacks JS
 async function resolveUnit(input: { unitId?: string | null; unit?: string | null }) {
   // 1) Preferir unitId se vier
   if (input.unitId) {
-    const u = await prisma.unit.findUnique({ where: { id: String(input.unitId) } });
+    const u = await prisma.unit.findUnique({
+      where: { id: String(input.unitId) },
+      select: { id: true, name: true, slug: true },
+    });
     if (u) return { unitId: u.id, unitName: u.name };
   }
 
@@ -55,14 +73,17 @@ async function resolveUnit(input: { unitId?: string | null; unit?: string | null
   if (raw) {
     // 2) tentar slug exato (slug é minúsculo geralmente)
     const guessSlug = raw.toLowerCase();
-    let u =
+    let u: UnitMin | null =
       (await prisma.unit.findUnique({
         where: { slug: guessSlug },
+        select: { id: true, name: true, slug: true },
       })) ||
       // 3) tentar contains em name (sensível ao caso do DB)
       (await prisma.unit.findFirst({
         where: { name: { contains: raw } },
-      }));
+        select: { id: true, name: true, slug: true },
+      })) ||
+      null;
 
     // 4) fallback: carrega todas e compara case-insensitive em JS
     if (!u) {
@@ -80,23 +101,29 @@ async function resolveUnit(input: { unitId?: string | null; unit?: string | null
   return { unitId: null as string | null, unitName: null as string | null };
 }
 
-// 🔧 resolve de área sem `mode`, com fallbacks JS e atrelada à unit
+// 🔧 resolve de área sem `mode`, com SELECT padronizado e atrelada à unit
 async function resolveArea(input: { areaId?: string | null; area?: string | null; unitId?: string | null }) {
   if (input.areaId) {
-    const a = await prisma.area.findUnique({ where: { id: String(input.areaId) } });
+    const a = await prisma.area.findUnique({
+      where: { id: String(input.areaId) },
+      select: { id: true, name: true },
+    });
     if (a) return { areaId: a.id, areaName: a.name };
   }
   const raw = (input.area || '').trim();
   if (raw && input.unitId) {
     // 1) exato em name + unitId
-    let a =
+    let a: AreaMin | null =
       (await prisma.area.findFirst({
         where: { unitId: String(input.unitId), name: raw },
+        select: { id: true, name: true },
       })) ||
       // 2) contains (sensível ao caso do DB)
       (await prisma.area.findFirst({
         where: { unitId: String(input.unitId), name: { contains: raw } },
-      }));
+        select: { id: true, name: true },
+      })) ||
+      null;
 
     // 3) fallback: carregar áreas da unidade e comparar case-insensitive em JS
     if (!a) {
@@ -367,17 +394,8 @@ reservationsRouter.get('/:id/qrcode', async (req, res) => {
 });
 
 /* =========================================================================
-   ✅ NOVO: Renovação de QR + mudança de status
+   ✅ Renovação de QR + mudança de status
    ========================================================================= */
-
-function newQrToken() {
-  return crypto.randomBytes(16).toString('hex'); // 32 chars hex
-}
-function computeQrExpiry(): Date {
-  const ttlHours = Number(process.env.QR_TTL_HOURS || 24);
-  return dayjs().add(ttlHours, 'hour').toDate();
-}
-
 reservationsRouter.post(
   '/:id/qr/renew',
   requireAuth,
@@ -504,7 +522,6 @@ reservationsRouter.put(
 /* =========================================================================
    ✅ Check-in autenticado (por ID e por token)
    ========================================================================= */
-
 reservationsRouter.post(
   '/:id/checkin',
   requireAuth,
@@ -597,7 +614,6 @@ reservationsRouter.post(
 /* =========================================================================
    CRUD (Controller) — com enrich/validate no CREATE/UPDATE
    ========================================================================= */
-
 reservationsRouter.post(
   '/',
   requireAuth,
