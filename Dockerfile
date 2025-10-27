@@ -1,20 +1,21 @@
 # -------- Base --------
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache openssl bash
+# precisamos de openssl (prisma), bash e netcat (espera ativa)
+RUN apk add --no-cache openssl bash netcat-openbsd
 
-# -------- Deps (dev) para compilar --------
+# -------- Deps (com dev) para compilar --------
 FROM base AS deps
 COPY package*.json ./
-# Evita rodar postinstall (prisma generate) antes do schema existir neste estágio
+# evita rodar postinstall antes do schema existir
 RUN npm ci --no-audit --no-fund --ignore-scripts
 
 # -------- Builder --------
 FROM deps AS builder
 COPY . .
-# Gera o Prisma Client (schema já existe aqui)
+# gera client (schema presente aqui)
 RUN npx prisma generate
-# Compila TS -> dist
+# compila TS
 RUN npm run build
 
 # -------- Runner (prod) --------
@@ -22,7 +23,7 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# instala só prod deps (sem postinstall)
+# só prod deps, ainda sem postinstall
 COPY package*.json ./
 RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts
 
@@ -31,18 +32,20 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 RUN mkdir -p /app/uploads
 
-# a app deve respeitar process.env.PORT (Railway injeta)
 EXPOSE 3000
 
-# Entrypoint:
-# - define DIRECT_URL fallback=DATABASE_URL
-# - gera client
-# - tenta migrate deploy 5x (retry)
-# - se falhar, fallback para db push (apenas p/ 1º deploy sem migrations)
-# - inicia a API
+# Espera DB abrir porta, gera client, aplica schema e sobe
 CMD bash -euxo pipefail -c '\
   export DIRECT_URL="${DIRECT_URL:-$DATABASE_URL}" ; \
+  # Espera DB
+  host=$(node -e "const u=new URL(process.env.DATABASE_URL);process.stdout.write(u.hostname)"); \
+  port=$(node -e "const u=new URL(process.env.DATABASE_URL);process.stdout.write(u.port || \"3306\")"); \
+  echo \"[wait-db] ${host}:${port}\" ; for i in {1..60}; do nc -z \"$host\" \"$port\" && break || sleep 2; done ; \
+  # Prisma
   export PRISMA_CLIENT_ENGINE_TYPE=binary ; \
   npx prisma generate ; \
-  npx prisma db push --accept-data-loss ; \
-  node dist/index.js'
+  npx prisma db push --accept-data-loss || (echo \"[db-push] retry\" && sleep 5 && npx prisma db push --accept-data-loss) ; \
+  # Descobre entrypoint
+  entry=$(node -e \"const fs=require('fs');const c=['dist/index.js','dist/main.js','dist/server.js','dist/src/index.js','api/dist/index.js','api/dist/main.js','api/dist/server.js'];for(const p of c){if(fs.existsSync(p)){console.log(p);process.exit(0)}}console.error('Nenhum entrypoint encontrado:', c.join(', '));process.exit(1)\"); \
+  echo \"[start] node $entry\" ; \
+  node \"$entry\"'
