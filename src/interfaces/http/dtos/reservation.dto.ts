@@ -6,7 +6,13 @@ export const CreateReservationDTO = z.object({
   cpf: z.string().trim().optional().nullable(),
   people: z.coerce.number().int().min(1).max(20),
   kids: z.coerce.number().int().min(0).max(20).default(0),
+
+  // LEGADO: nome livre da área (mantido por compat)
   area: z.string().trim().optional().nullable(),
+
+  // Preferencial: IDs relacionais
+  unitId: z.string().uuid().optional().nullable(),
+  areaId: z.string().uuid().optional().nullable(),
 
   // ISO string vinda do front
   reservationDate: z.string().min(1),
@@ -24,7 +30,10 @@ export const CreateReservationDTO = z.object({
 
   url: z.string().trim().optional().nullable(),
   ref: z.string().trim().optional().nullable(),
+
+  // LEGADO: nome/slug de unidade (mantido por compat)
   unit: z.string().trim().optional().nullable(),
+
   source: z.string().trim().optional().nullable(),
 });
 export type CreateReservationDTOType = z.infer<typeof CreateReservationDTO>;
@@ -34,7 +43,13 @@ export const UpdateReservationDTO = z.object({
   cpf: z.string().trim().optional().nullable(),
   people: z.number().int().min(1).optional(),
   kids: z.coerce.number().int().min(0).max(20).optional(),
+
+  // LEGADO
   area: z.string().trim().optional().nullable(),
+
+  // Preferencial: IDs relacionais (não convertem undefined p/ null)
+  unitId: z.string().uuid().optional().nullable(),
+  areaId: z.string().uuid().optional().nullable(),
 
   // update aceita Date (coerce) para facilitar PUT parcial
   reservationDate: z.coerce.date().optional(),
@@ -52,7 +67,10 @@ export const UpdateReservationDTO = z.object({
 
   url: z.string().trim().optional().nullable(),
   ref: z.string().trim().optional().nullable(),
+
+  // LEGADO
   unit: z.string().trim().optional().nullable(),
+
   source: z.string().trim().optional().nullable(),
 });
 export type UpdateReservationInput = z.infer<typeof UpdateReservationDTO>;

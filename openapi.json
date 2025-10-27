@@ -2,17 +2,74 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Mané API",
-    "version": "1.1.0"
+    "version": "1.2.1"
   },
-  "servers": [
-    { "url": "/" }
-  ],
+  "servers": [{ "url": "/" }],
   "paths": {
     "/health": {
       "get": {
         "summary": "Healthcheck",
+        "responses": { "200": { "description": "ok" } }
+      }
+    },
+
+    "/auth/login": {
+      "post": {
+        "summary": "Login",
+        "description": "Autentica o usuário e retorna um JWT curto. A resposta inclui `token` e `accessToken` (mesmo valor) para compatibilidade.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } } }
+        },
         "responses": {
-          "200": { "description": "ok" }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginResponse" } } } },
+          "400": { "description": "invalid payload", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } },
+          "401": { "description": "invalid credentials", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+
+    "/auth/me": {
+      "get": {
+        "summary": "Get current user",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string" },
+                        "name": { "type": "string" },
+                        "email": { "type": "string" },
+                        "role": { "type": "string", "enum": ["ADMIN", "STAFF"] },
+                        "isActive": { "type": "boolean" },
+                        "createdAt": { "type": "string", "format": "date-time" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
+        }
+      }
+    },
+
+    "/auth/logout": {
+      "post": {
+        "summary": "Logout (stateless)",
+        "description": "JWT é stateless. O backend apenas responde 204; o front deve descartar o token local.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "204": { "description": "no content" },
+          "401": { "description": "unauthenticated", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorResponse" } } } }
         }
       }
     },
@@ -21,44 +78,29 @@
       "get": {
         "summary": "List reservations",
         "parameters": [
-          { "in": "query", "name": "page", "schema": { "type": "integer", "minimum": 1 }, "required": false },
-          { "in": "query", "name": "pageSize", "schema": { "type": "integer", "minimum": 1, "maximum": 100 }, "required": false },
-          { "in": "query", "name": "search", "schema": { "type": "string" }, "required": false },
-          { "in": "query", "name": "unit", "schema": { "type": "string" }, "required": false },
-          { "in": "query", "name": "from", "schema": { "type": "string", "format": "date-time" }, "required": false },
-          { "in": "query", "name": "to", "schema": { "type": "string", "format": "date-time" }, "required": false }
+          { "in": "query", "name": "page", "schema": { "type": "integer", "minimum": 1 } },
+          { "in": "query", "name": "pageSize", "schema": { "type": "integer", "minimum": 1, "maximum": 100 } },
+          { "in": "query", "name": "search", "schema": { "type": "string" } },
+          { "in": "query", "name": "unit", "schema": { "type": "string" } },
+          { "in": "query", "name": "from", "schema": { "type": "string", "format": "date-time" } },
+          { "in": "query", "name": "to", "schema": { "type": "string", "format": "date-time" } }
         ],
         "responses": {
-          "200": {
-            "description": "ok",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/ReservationListResponse" }
-              }
-            }
-          }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReservationListResponse" } } } }
         }
       },
       "post": {
         "summary": "Create reservation",
+        "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/ReservationCreate" }
-            }
-          }
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReservationCreate" } } }
         },
         "responses": {
-          "201": {
-            "description": "created",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/Reservation" }
-              }
-            }
-          },
-          "400": { "description": "bad request" }
+          "201": { "description": "created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Reservation" } } } },
+          "400": { "description": "bad request" },
+          "401": { "description": "unauthorized" },
+          "403": { "description": "forbidden" }
         }
       }
     },
@@ -94,9 +136,7 @@
     "/v1/reservations/checkin/{token}": {
       "get": {
         "summary": "Check-in by QR token (idempotent)",
-        "parameters": [
-          { "in": "path", "name": "token", "required": true, "schema": { "type": "string" } }
-        ],
+        "parameters": [{ "in": "path", "name": "token", "required": true, "schema": { "type": "string" } }],
         "responses": {
           "200": { "description": "ok (HTML message)" },
           "404": { "description": "invalid token" },
@@ -108,9 +148,7 @@
     "/v1/reservations/{id}/status": {
       "get": {
         "summary": "Get reservation status",
-        "parameters": [
-          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
-        ],
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
         "responses": {
           "200": {
             "description": "ok",
@@ -135,9 +173,7 @@
     "/v1/reservations/{id}/qrcode": {
       "get": {
         "summary": "Get reservation QR (PNG)",
-        "parameters": [
-          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
-        ],
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
         "responses": {
           "200": { "description": "PNG image", "content": { "image/png": { "schema": { "type": "string", "format": "binary" } } } },
           "404": { "description": "not found" }
@@ -148,9 +184,8 @@
     "/v1/reservations/{id}/qr/renew": {
       "post": {
         "summary": "Renew QR token",
-        "parameters": [
-          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
-        ],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
         "responses": {
           "200": {
             "description": "ok",
@@ -169,6 +204,8 @@
               }
             }
           },
+          "401": { "description": "unauthorized" },
+          "403": { "description": "forbidden" },
           "404": { "description": "not found" }
         }
       }
@@ -177,9 +214,7 @@
     "/v1/reservations/{id}": {
       "get": {
         "summary": "Get reservation by id",
-        "parameters": [
-          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
-        ],
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
         "responses": {
           "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Reservation" } } } },
           "404": { "description": "not found" }
@@ -187,37 +222,189 @@
       },
       "put": {
         "summary": "Update reservation",
-        "parameters": [
-          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
-        ],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
         "requestBody": {
           "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/ReservationUpdate" }
-            }
-          }
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReservationUpdate" } } }
         },
         "responses": {
           "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Reservation" } } } },
           "400": { "description": "bad request" },
+          "401": { "description": "unauthorized" },
+          "403": { "description": "forbidden" },
           "404": { "description": "not found" }
         }
       },
       "delete": {
         "summary": "Delete reservation",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "204": { "description": "no content" },
+          "401": { "description": "unauthorized" },
+          "403": { "description": "forbidden" }
+        }
+      }
+    },
+
+    "/v1/reservations/units": {
+      "get": {
+        "summary": "List unit names present in reservations",
+        "description": "Retorna uma lista de nomes de unidades distintos encontrados nas reservas (string array).",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "type": "string" }, "example": ["Águas Claras", "Arena Brasília"] }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/v1/units": {
+      "get": {
+        "summary": "List units",
+        "description": "Público. Use `active=true` para listar apenas unidades ativas.",
         "parameters": [
-          { "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }
+          { "in": "query", "name": "page", "schema": { "type": "integer", "minimum": 1 }, "required": false },
+          { "in": "query", "name": "pageSize", "schema": { "type": "integer", "minimum": 1, "maximum": 100 }, "required": false },
+          { "in": "query", "name": "search", "schema": { "type": "string" }, "required": false },
+          { "in": "query", "name": "active", "schema": { "type": "boolean" }, "required": false }
         ],
         "responses": {
-          "204": { "description": "no content" }
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UnitListResponse" } } } }
+        }
+      },
+      "post": {
+        "summary": "Create unit",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UnitCreate" } } }
+        },
+        "responses": {
+          "201": { "description": "created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Unit" } } } },
+          "400": { "description": "bad request" },
+          "401": { "description": "unauthorized" },
+          "403": { "description": "forbidden" },
+          "409": { "description": "slug already in use" }
+        }
+      }
+    },
+
+    "/v1/units/public/options/list": {
+      "get": {
+        "summary": "Public unit options (active only)",
+        "description": "Público. Lista enxuta para dropdowns: unidades ativas ordenadas por nome.",
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "name": { "type": "string" },
+                      "slug": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "/v1/units/{id}": {
+      "get": {
+        "summary": "Get unit by id",
+        "description": "Público.",
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Unit" } } } },
+          "404": { "description": "not found" }
+        }
+      },
+      "put": {
+        "summary": "Update unit",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UnitUpdate" } } }
+        },
+        "responses": {
+          "200": { "description": "ok", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Unit" } } } },
+          "400": { "description": "bad request" },
+          "401": { "description": "unauthorized" },
+          "403": { "description": "forbidden" },
+          "404": { "description": "not found" },
+          "409": { "description": "slug already in use" }
+        }
+      },
+      "delete": {
+        "summary": "Delete unit",
+        "description": "Hard delete. Bloqueado caso existam reservas associadas.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [{ "in": "path", "name": "id", "required": true, "schema": { "type": "string" } }],
+        "responses": {
+          "204": { "description": "no content" },
+          "401": { "description": "unauthorized" },
+          "403": { "description": "forbidden" },
+          "409": { "description": "unit has linked reservations" }
         }
       }
     }
   },
 
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Cole o token gerado por /auth/login. No Swagger UI, use o JWT completo (sem a palavra 'Bearer')."
+      }
+    },
     "schemas": {
+      "LoginRequest": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "example": "admin@mane.com.vc" },
+          "password": { "type": "string", "minLength": 6, "example": "troque-esta-senha" }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "description": "JWT (compat)", "example": "eyJhbGciOi..." },
+          "accessToken": { "type": "string", "description": "JWT curto (Authorization: Bearer ...)", "example": "eyJhbGciOi..." },
+          "tokenType": { "type": "string", "example": "Bearer" },
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "email": { "type": "string" },
+              "role": { "type": "string", "enum": ["ADMIN", "STAFF"] }
+            }
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": { "error": { "type": "string", "example": "Invalid credentials" } }
+      },
+
       "Reservation": {
         "type": "object",
         "properties": {
@@ -306,10 +493,46 @@
       "ReservationListResponse": {
         "type": "object",
         "properties": {
-          "items": {
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/Reservation" }
-          },
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Reservation" } },
+          "total": { "type": "integer" },
+          "page": { "type": "integer" },
+          "pageSize": { "type": "integer" },
+          "totalPages": { "type": "integer" }
+        }
+      },
+
+      "Unit": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "slug": { "type": "string" },
+          "isActive": { "type": "boolean" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "UnitCreate": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "example": "Águas Claras" },
+          "slug": { "type": "string", "example": "aguas-claras" },
+          "isActive": { "type": "boolean", "example": true }
+        }
+      },
+      "UnitUpdate": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "slug": { "type": "string" },
+          "isActive": { "type": "boolean" }
+        }
+      },
+      "UnitListResponse": {
+        "type": "object",
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Unit" } },
           "total": { "type": "integer" },
           "page": { "type": "integer" },
           "pageSize": { "type": "integer" },

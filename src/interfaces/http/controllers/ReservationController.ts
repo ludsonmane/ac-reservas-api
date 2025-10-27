@@ -49,7 +49,13 @@ export class ReservationController {
       cpf: nonEmptyOrNull(b.cpf),
       people: toInt(b.people, 1),
       kids: Math.max(0, toInt(b.kids, 0)),
+
+      // LEGADO (string livre) — ainda aceito
       area: nonEmptyOrNull(b.area),
+
+      // NOVOS (preferenciais): IDs relacionais
+      unitId: nonEmptyOrNull(b.unitId),
+      areaId: nonEmptyOrNull(b.areaId),
 
       reservationDate: new Date(b.reservationDate),
       birthdayDate: b.birthdayDate ? dateOrNull(b.birthdayDate) : null,
@@ -66,12 +72,15 @@ export class ReservationController {
 
       url: nonEmptyOrNull(b.url),
       ref: nonEmptyOrNull(b.ref),
+
+      // LEGADO (nome/slug da unidade) — ainda aceito
       unit: nonEmptyOrNull(b.unit),
+
       source: nonEmptyOrNull(b.source) ?? 'site',
     };
 
     const created = await this.createUC.execute(payload as any);
-    const c = created as any; // <- prisma model com email, qrToken, reservationDate, etc.
+    const c = created as any; // prisma model
 
     // Envia ticket por e-mail sem bloquear a resposta
     try {
@@ -90,6 +99,7 @@ export class ReservationController {
           email: c.email,
           phone: c.phone ?? undefined,
           people: c.people,
+          // mantém compat: se você denormalizar "unitName" depois, pode trocar aqui
           unit: c.unit ?? 'Mané Mercado',
           table: c.table ?? undefined,
           reservationDate: reservationDateIso,
@@ -111,13 +121,15 @@ export class ReservationController {
     const page = Math.max(parseInt(String(req.query.page ?? '1'), 10), 1);
     const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize ?? '20'), 10), 1), 100);
     const search = String(req.query.search ?? '').trim();
-    const unit = String(req.query.unit ?? '').trim();
+    const unit = String(req.query.unit ?? '').trim();          // LEGADO (nome/slug)
+    const areaId = String(req.query.areaId ?? '').trim();      // ✅ NOVO
     const from = parseDateMaybe(req.query.from);
     const to = parseDateMaybe(req.query.to);
 
     const { items, total } = await this.listUC.execute({
       search,
-      unit,
+      unit,                                   // legado
+      areaId: areaId || undefined,            // ✅ passa se vier
       from,
       to,
       skip: (page - 1) * pageSize,
@@ -142,8 +154,10 @@ export class ReservationController {
     const b = parsed.data as Record<string, any>;
     const payload: Record<string, any> = { ...b };
 
+    // normalizações iguais às do create, quando o campo vier no body
     if (b.kids !== undefined) payload.kids = Math.max(0, toInt(b.kids, 0));
     if (b.people !== undefined) payload.people = Math.max(1, toInt(b.people, 1));
+
     if (b.email !== undefined) payload.email = nonEmptyOrNull(b.email);
     if (b.phone !== undefined) payload.phone = nonEmptyOrNull(b.phone);
     if (b.notes !== undefined) payload.notes = nonEmptyOrNull(b.notes);
@@ -156,6 +170,14 @@ export class ReservationController {
     if (b.utm_campaign !== undefined) payload.utm_campaign = nonEmptyOrNull(b.utm_campaign);
     if (b.utm_content !== undefined) payload.utm_content = nonEmptyOrNull(b.utm_content);
     if (b.utm_term !== undefined) payload.utm_term = nonEmptyOrNull(b.utm_term);
+
+    // LEGADO (strings livres)
+    if (b.unit !== undefined) payload.unit = nonEmptyOrNull(b.unit);
+    if (b.area !== undefined) payload.area = nonEmptyOrNull(b.area);
+
+    // NOVOS (IDs relacionais)
+    if (b.unitId !== undefined) payload.unitId = nonEmptyOrNull(b.unitId);
+    if (b.areaId !== undefined) payload.areaId = nonEmptyOrNull(b.areaId);
 
     const updated = await this.updateUC.execute(req.params.id, payload as any);
     return res.json(updated);
