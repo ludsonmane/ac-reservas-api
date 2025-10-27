@@ -7,12 +7,8 @@ const prisma = new PrismaClient();
 
 function slugify(s: string) {
   return s
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)+/g, '');
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
 }
 
 async function seedAdmin() {
@@ -51,8 +47,6 @@ async function seedAdmin() {
 type UnitSeed = { name: string; slug?: string; isActive?: boolean };
 
 function parseUnitsFromEnv(): UnitSeed[] {
-  // Opcional: defina UNITS_JSON no .env, ex:
-  // UNITS_JSON=[{"name":"Mané Centro"},{"name":"Mané Asa Sul","slug":"asa-sul"}]
   const raw = process.env.UNITS_JSON?.trim();
   if (raw) {
     try {
@@ -60,24 +54,28 @@ function parseUnitsFromEnv(): UnitSeed[] {
       if (Array.isArray(arr)) {
         return arr
           .map((u: any) => ({
-            name: String(u.name || '').trim(),
-            slug: u.slug ? String(u.slug).trim() : undefined,
-            isActive: typeof u.isActive === 'boolean' ? u.isActive : true,
+            name: String(u?.name || '').trim(),
+            slug: u?.slug ? String(u.slug).trim() : undefined,
+            isActive: typeof u?.isActive === 'boolean' ? u.isActive : true,
           }))
-          .filter((u) => u.name.length > 1);
+          .filter((u: UnitSeed) => u.name.length > 1);
       }
     } catch (e) {
       console.warn('⚠️  UNITS_JSON inválido, usando defaults. Erro:', e);
     }
   }
-  // Defaults simpáticos
-  return [{ name: 'Mané Centro' }, { name: 'Mané Asa Sul' }];
+  return [
+    { name: 'Mané Centro' },
+    { name: 'Mané Asa Sul' },
+  ];
 }
 
-async function seedUnits() {
+type UnitMin = { id: string; name: string; slug: string };
+
+async function seedUnits(): Promise<UnitMin[]> {
   const units = parseUnitsFromEnv();
 
-  const createdOrUpdated: { id: string; name: string; slug: string }[] = [];
+  const createdOrUpdated: UnitMin[] = [];
   for (const u of units) {
     const name = u.name.trim();
     const slug = (u.slug && u.slug.trim()) || slugify(name);
@@ -92,18 +90,13 @@ async function seedUnits() {
     createdOrUpdated.push(unit);
   }
 
-  console.log(
-    `✅ Units semeadas/atualizadas: ${
-      createdOrUpdated.map((u) => `${u.name}(${u.slug})`).join(', ') || 'nenhuma'
-    }`
-  );
+  console.log(`✅ Units semeadas/atualizadas: ${createdOrUpdated.map(u => `${u.name}(${u.slug})`).join(', ') || 'nenhuma'}`);
   return createdOrUpdated;
 }
 
-async function seedAreasForUnits(units: { id: string; name: string; slug: string }[]) {
-  // Templates simples de áreas por unidade (ajuste à vontade)
+async function seedAreasForUnits(units: UnitMin[]) {
   const templates = [
-    { name: 'Salão', afternoon: 30, night: 50 },
+    { name: 'Salão',   afternoon: 30, night: 50 },
     { name: 'Varanda', afternoon: 20, night: 30 },
     { name: 'Mezanino', afternoon: 15, night: 25 },
   ];
@@ -124,7 +117,6 @@ async function seedAreasForUnits(units: { id: string; name: string; slug: string
           isActive: true,
           capacityAfternoon: t.afternoon,
           capacityNight: t.night,
-          // photoUrl: null (pode subir pelo admin depois)
         },
       });
       created++;
@@ -134,10 +126,8 @@ async function seedAreasForUnits(units: { id: string; name: string; slug: string
 }
 
 /**
- * Backfill para reservations.unitId a partir dos campos legados:
- * - tenta por slug (gerado do name legado)
- * - depois tenta por contains no nome
- * - se ainda assim falhar, faz match case-insensitive em JS
+ * Backfill de unitId em reservas legadas que só têm o nome da unidade em `unit`.
+ * Evita `undefined` e evita `mode` em slug (fazemos resolução em JS quando necessário).
  */
 async function backfillReservationUnitId() {
   const toFix = await prisma.reservation.findMany({
@@ -151,37 +141,45 @@ async function backfillReservationUnitId() {
     return;
   }
 
+  // cache simples das unidades para comparação JS (case-insensitive)
+  const allUnits: UnitMin[] = await prisma.unit.findMany({
+    select: { id: true, name: true, slug: true },
+  });
+  const bySlug = new Map<string, UnitMin>(
+    allUnits.map((u) => [u.slug.toLowerCase(), u])
+  );
+  const byName = new Map<string, UnitMin>(
+    allUnits.map((u) => [u.name.toLowerCase(), u])
+  );
+
   let fixCount = 0;
   for (const r of toFix) {
-    const name = (r.unit || '').trim();
-    if (!name) continue;
+    const rawName = (r.unit || '').trim();
+    if (!rawName) continue;
 
-    // 1) tenta por slug
-    const guessSlug = slugify(name);
-    let unit =
-      (await prisma.unit.findUnique({
-        where: { slug: guessSlug },
-        select: { id: true, name: true, slug: true },
-      })) ||
-      // 2) tenta por "contains" no nome (sensível a caso no banco)
-      (await prisma.unit.findFirst({
-        where: { name: { contains: name } },
-        select: { id: true, name: true, slug: true },
-      }));
+    // 1) tenta slug direto
+    const guessSlug = slugify(rawName);
+    let u: UnitMin | null =
+      bySlug.get(guessSlug) ??
+      null;
 
-    // 3) fallback: carrega todas e compara case-insensitive em JS
-    if (!unit) {
-      const all = await prisma.unit.findMany({ select: { id: true, name: true, slug: true } });
-      const lowered = name.toLowerCase();
-      unit =
-        all.find((u) => u.name.toLowerCase() === lowered) ||
-        all.find((u) => u.name.toLowerCase().includes(lowered));
+    // 2) tenta nome exato (case-insensitive)
+    if (!u) {
+      u = byName.get(rawName.toLowerCase()) ?? null;
     }
 
-    if (unit) {
+    // 3) tenta "contains" em JS
+    if (!u) {
+      const lowered = rawName.toLowerCase();
+      u =
+        allUnits.find((x) => x.name.toLowerCase().includes(lowered)) ??
+        null;
+    }
+
+    if (u) {
       await prisma.reservation.update({
         where: { id: r.id },
-        data: { unitId: unit.id },
+        data: { unitId: u.id },
       });
       fixCount++;
     }

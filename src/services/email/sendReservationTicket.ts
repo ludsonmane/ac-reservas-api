@@ -43,8 +43,8 @@ function toTitle(s?: string | null) {
 function formatPhoneBR(p?: string) {
   if (!p) return "";
   const d = p.replace(/\D/g, "");
-  if (d.length === 11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`;
-  if (d.length === 10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`;
+  if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   return p;
 }
 
@@ -66,9 +66,9 @@ function buildHtml(
     <div style="max-width:680px;margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 6px 22px rgba(2,6,23,.06);overflow:hidden;">
       <div style="padding:16px 0;text-align:center;">
         ${logoCid
-          ? `<img src="cid:${logoCid}" alt="Mané Mercado" style="height:28px;display:inline-block;"/>`
-          : `<div style="font-weight:700;font-size:18px;color:#0f172a;">Mané Mercado</div>`
-        }
+      ? `<img src="cid:${logoCid}" alt="Mané Mercado" style="height:28px;display:inline-block;"/>`
+      : `<div style="font-weight:700;font-size:18px;color:#0f172a;">Mané Mercado</div>`
+    }
       </div>
 
       <div style="background:${colors.primary};color:#fff;padding:22px;border-radius:14px;margin:0 20px;">
@@ -128,7 +128,7 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
   sgMail.setApiKey(env.SENDGRID_API_KEY);
 
   // Código preferido = reservationCode; fallback = code; por fim, id
-  const codeTxt = ticket.reservationCode;
+  const codeTxt = ticket.reservationCode || ticket.code || ticket.id;
 
   // URL pública fixa para consulta
   const baseConsult = env.MAIL_CONSULT_BASE.replace(/\/$/, "");
@@ -137,9 +137,15 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
   // QR inline
   const qrPng = await QRCode.toBuffer(ticket.checkinUrl, { errorCorrectionLevel: "M", margin: 1, width: 600 });
   const qrCid = "qrTicket";
-  const logoCid = env.MAIL_LOGO_BASE64 || env.MAIL_LOGO_URL ? "logoCid" : null;
+  const logoCid: string | null = env.MAIL_LOGO_BASE64 || env.MAIL_LOGO_URL ? "logoCid" : null;
 
-  const html = buildHtml(ticket, qrCid, logoCid, { primary: env.MAIL_PRIMARY_COLOR, accent: env.MAIL_ACCENT_COLOR }, consultUrl, codeTxt);
+  const html = buildHtml(
+    ticket,
+    qrCid,
+    logoCid,
+    { primary: env.MAIL_PRIMARY_COLOR, accent: env.MAIL_ACCENT_COLOR },
+    consultUrl,
+    codeTxt)
   const text = [
     `Sua reserva foi confirmada — ${toTitle(ticket.unit)}`,
     `Código: ${codeTxt}`,

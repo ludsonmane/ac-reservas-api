@@ -89,7 +89,9 @@ export function buildServer() {
   };
 
   app.use(cors(corsOptions));
-  app.options('*', cors(corsOptions));
+  // ✅ alternativa opcional, compatível:
+app.options(/.*/, cors(corsOptions) as any);
+
 
   // Static: /uploads (fotos de áreas)
   const uploadsDir = path.resolve(process.cwd(), 'uploads');
