@@ -66,12 +66,13 @@ RUN printf '%s\n' \
 '  npx prisma db push --accept-data-loss' \
 'fi' \
 '' \
-'# Descobre entrypoint automaticamente' \
+'# Descobre entrypoint automaticamente (array de candidatos)' \
+'candidates=(' \
+'  "dist/index.js" "dist/main.js" "dist/server.js" "dist/src/index.js"' \
+'  "api/dist/index.js" "api/dist/main.js" "api/dist/server.js"' \
+')' \
 'entry=""' \
-'for cand in ' \
-'  dist/index.js dist/main.js dist/server.js dist/src/index.js ' \
-'  api/dist/index.js api/dist/main.js api/dist/server.js' \
-'do' \
+'for cand in "${candidates[@]}"; do' \
 '  if [ -f "$cand" ]; then' \
 '    entry="$cand"' \
 '    break' \
