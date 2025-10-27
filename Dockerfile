@@ -23,7 +23,7 @@ FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# instala só deps de produção (ainda sem postinstall)
+# instala só deps de produção (sem postinstall)
 COPY package*.json ./
 RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts
 
@@ -34,16 +34,17 @@ COPY --from=builder /app/prisma ./prisma
 # pasta para uploads locais (se usar)
 RUN mkdir -p /app/uploads
 
-# ---- ENTRYPOINT script (evita bash -c gigante) ----
-RUN printf '%s\n' '#!/usr/bin/env bash
+# ---- ENTRYPOINT script (em arquivo; nada de bash -c gigante) ----
+RUN cat > /app/entry.sh << 'EOF'
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Fallback: DIRECT_URL = DATABASE_URL se não vier setada
 export DIRECT_URL="${DIRECT_URL:-$DATABASE_URL}"
 
 # Espera DB ficar de pé (TCP handshake simples)
-host=$(node -e '\''const u=new URL(process.env.DATABASE_URL);process.stdout.write(u.hostname)'\'' )
-port=$(node -e '\''const u=new URL(process.env.DATABASE_URL);process.stdout.write(u.port || "3306")'\'' )
+host=$(node -e 'const u=new URL(process.env.DATABASE_URL);process.stdout.write(u.hostname)')
+port=$(node -e 'const u=new URL(process.env.DATABASE_URL);process.stdout.write(u.port || "3306")')
 echo "[wait-db] ${host}:${port}"
 for i in {1..60}; do
   if nc -z "$host" "$port"; then
@@ -53,12 +54,12 @@ for i in {1..60}; do
   sleep 2
 done
 
-# Prisma: engine binária é mais estável em container
+# Prisma: engine binária é estável em container
 export PRISMA_CLIENT_ENGINE_TYPE=binary
 npx prisma generate
 
-# Primeiro deploy: aplica schema direto (fallback robusto no Railway).
-# Depois que tiver migrations versionadas, troque para "npx prisma migrate deploy".
+# Primeiro deploy: aplica schema direto (robusto no Railway).
+# Quando tiver migrations versionadas, troque para "npx prisma migrate deploy".
 if ! npx prisma db push --accept-data-loss; then
   echo "[db-push] falhou, tentando novamente em 5s..."
   sleep 5
@@ -85,9 +86,10 @@ fi
 
 echo "[start] node ${entry}"
 exec node "${entry}"
-' > /app/entry.sh && chmod +x /app/entry.sh
+EOF
+RUN chmod +x /app/entry.sh
 
 EXPOSE 3000
 
-# Use o script como entrypoint
+# Usa o script como entrypoint
 CMD ["bash", "/app/entry.sh"]
