@@ -5,45 +5,60 @@
   "engines": {
     "node": ">=18.18 <23"
   },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts",
+    "schema": "prisma/schema.prisma"
+  },
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only --files src/index.ts",
     "// local-only helpers": "------------------------------------------------",
-    "db:gen": "node node_modules/prisma/build/index.js generate",
-    "db:migrate": "node node_modules/prisma/build/index.js migrate dev",
+    "db:gen": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
     "// build/start (prod)": "------------------------------------------------",
-    "prebuild": "node node_modules/prisma/build/index.js generate",
-    "build": "node node_modules/typescript/lib/tsc.js -p tsconfig.json",
+    "prebuild": "prisma generate",
+    "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "prisma:migrate": "node node_modules/prisma/build/index.js migrate deploy",
     "lint": "echo \"add eslint if you want\""
   },
   "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@mantine/next": "^6.0.22",
     "@prisma/client": "^6.16.3",
     "@sendgrid/mail": "^7.7.0",
+    "@types/bcryptjs": "^2.4.6",
+    "argon2": "^0.44.0",
+    "bcryptjs": "^3.0.2",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
+    "dayjs": "^1.11.18",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
     "prisma": "^6.16.3",
     "qrcode": "^1.5.4",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^9.0.1",
-    "zod": "^3.23.8"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.7.5",
     "@types/qrcode": "^1.5.5",
     "@types/swagger-ui-express": "^4.1.7",
     "@types/uuid": "^9.0.7",
     "pino-pretty": "^13.1.1",
     "ts-node-dev": "^2.0.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.6.3"
   }
 }

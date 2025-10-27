@@ -37,9 +37,44 @@ export class PrismaReservationRepository implements ReservationRepository {
 
     let reservationCode = await uniqueReservationCode();
 
+    /* 🔒 Consistência: unitId / areaId (opcionais) */
+    let resolvedUnitId: string | null = data?.unitId ?? null;
+    let resolvedAreaId: string | null = data?.areaId ?? null;
+    let resolvedAreaName: string | null = null;
+
+    if (resolvedUnitId) {
+      const unit = await prisma.unit.findUnique({ where: { id: String(resolvedUnitId) } });
+      if (!unit) {
+        const e = new Error('Unidade não encontrada (unitId inválido)');
+        (e as any).status = 400;
+        throw e;
+      }
+    }
+
+    if (resolvedAreaId) {
+      const area = await prisma.area.findUnique({
+        where: { id: String(resolvedAreaId) },
+        select: { id: true, name: true, unitId: true },
+      });
+      if (!area) {
+        const e = new Error('Área não encontrada (areaId inválido)');
+        (e as any).status = 400;
+        throw e;
+      }
+      if (resolvedUnitId && area.unitId !== resolvedUnitId) {
+        const e = new Error('A área informada não pertence à unidade (AREA_UNIT_MISMATCH)');
+        (e as any).status = 400;
+        throw e;
+      }
+      if (!resolvedUnitId) resolvedUnitId = area.unitId; // herda da área
+      resolvedAreaName = area.name;
+    }
+
     // 🔧 Normaliza payload e garante defaults
     const payload = {
       ...data,
+
+      // números
       kids:
         typeof data?.kids === 'number'
           ? data.kids
@@ -47,15 +82,29 @@ export class PrismaReservationRepository implements ReservationRepository {
             ? Number(data.kids)
             : 0,
 
-      // normaliza opcionais para null (conforme schema)
-      unit: data?.unit ?? null,
-      area: data?.area ?? null,
+      people:
+        typeof data?.people === 'number'
+          ? Math.max(1, Math.trunc(data.people))
+          : Math.max(1, Number.isFinite(Number(data?.people)) ? Math.trunc(Number(data.people)) : 1),
+
+      // datas
+      reservationDate:
+        data?.reservationDate instanceof Date
+          ? data.reservationDate
+          : new Date(data?.reservationDate),
+
+      birthdayDate:
+        data?.birthdayDate ? new Date(data.birthdayDate) : null,
+
+      // opcionais → null
+      unit: data?.unit ?? null,    // legado (nome/slug)
+      area: data?.area ?? null,    // legado (string livre)
       notes: data?.notes ?? null,
       email: data?.email ?? null,
       phone: data?.phone ?? null,
       source: data?.source ?? 'site',
 
-      // somente utm_* (se não vierem, ficam null)
+      // UTM
       utm_source: data?.utm_source ?? null,
       utm_medium: data?.utm_medium ?? null,
       utm_campaign: data?.utm_campaign ?? null,
@@ -64,6 +113,11 @@ export class PrismaReservationRepository implements ReservationRepository {
 
       url: data?.url ?? null,
       ref: data?.ref ?? null,
+
+      // Preferenciais (IDs) + denormalização
+      unitId: resolvedUnitId ?? null,
+      areaId: resolvedAreaId ?? null,
+      areaName: resolvedAreaName ?? (data?.area ?? null),
     };
 
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -93,7 +147,8 @@ export class PrismaReservationRepository implements ReservationRepository {
     throw new Error('Não foi possível criar a reserva com um reservationCode único');
   }
 
-  async findMany({ search, unit, from, to, skip, take }: FindManyParams) {
+  // ✅ inclui areaId
+  async findMany({ search, unit, areaId, from, to, skip, take }: FindManyParams) {
     const safeSkip = Math.max(0, Number(skip) || 0);
     const safeTake = Math.min(100, Math.max(1, Number(take) || 20));
     const q = (search ?? '').toString().trim();
@@ -114,8 +169,11 @@ export class PrismaReservationRepository implements ReservationRepository {
           birthdayDate: true,
           phone: true,
           email: true,
-          unit: true,
-          area: true,
+          unit: true,       // legado
+          unitId: true,     // novo
+          area: true,       // legado
+          areaId: true,     // novo
+          areaName: true,   // denormalizado
           status: true,
           createdAt: true,
           updatedAt: true,
@@ -125,6 +183,7 @@ export class PrismaReservationRepository implements ReservationRepository {
       });
       if (!hit) return { items: [], total: 0 };
       if (unit && hit.unit && unit !== hit.unit) return { items: [], total: 0 };
+      if (areaId && hit.areaId && areaId !== hit.areaId) return { items: [], total: 0 }; // ✅ aplica também no atalho
       return { items: [hit as any], total: 1 };
     }
 
@@ -141,7 +200,8 @@ export class PrismaReservationRepository implements ReservationRepository {
       ];
     }
 
-    if (unit) where.unit = unit;
+    if (unit) where.unit = unit;         // legado
+    if (areaId) where.areaId = areaId;   // ✅ novo
 
     if (isValidDate(from) || isValidDate(to)) {
       where.reservationDate = {};
@@ -166,8 +226,11 @@ export class PrismaReservationRepository implements ReservationRepository {
           birthdayDate: true,
           phone: true,
           email: true,
-          unit: true,
-          area: true,
+          unit: true,       // legado
+          unitId: true,     // novo
+          area: true,       // legado
+          areaId: true,     // novo
+          areaName: true,   // denormalizado
           status: true,
           createdAt: true,
           updatedAt: true,
@@ -191,7 +254,9 @@ export class PrismaReservationRepository implements ReservationRepository {
         cpf: true,
         people: true,
         kids: true,
-        area: true,
+        area: true,        // legado
+        areaId: true,      // novo
+        areaName: true,    // denormalizado
         reservationDate: true,
         birthdayDate: true,
         phone: true,
@@ -204,7 +269,8 @@ export class PrismaReservationRepository implements ReservationRepository {
         utm_term: true,
         url: true,
         ref: true,
-        unit: true,
+        unit: true,        // legado
+        unitId: true,      // novo
         source: true,
         status: true,
         qrToken: true,
@@ -227,7 +293,9 @@ export class PrismaReservationRepository implements ReservationRepository {
         cpf: true,
         people: true,
         kids: true,
-        area: true,
+        area: true,        // legado
+        areaId: true,      // novo
+        areaName: true,    // denormalizado
         reservationDate: true,
         birthdayDate: true,
         phone: true,
@@ -240,7 +308,8 @@ export class PrismaReservationRepository implements ReservationRepository {
         utm_term: true,
         url: true,
         ref: true,
-        unit: true,
+        unit: true,        // legado
+        unitId: true,      // novo
         source: true,
         status: true,
         qrToken: true,

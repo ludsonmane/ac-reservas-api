@@ -9,6 +9,7 @@ export interface FindManyParams {
   /** Filtro de data inicial (inclusive) para reservationDate */
   from?: Date;
   /** Filtro de data final (inclusive) para reservationDate */
+  areaId?: string;         // ✅ NOVO
   to?: Date;
   /** Offset para paginação */
   skip: number;
@@ -21,7 +22,7 @@ export interface ReservationRepository {
   create(data: any): Promise<Reservation>;
 
   /** Lista reservas com paginação e total */
-  findMany(params: FindManyParams): Promise<{ items: Reservation[]; total: number }>;
+  findMany(params: FindManyParams): Promise<{ items: any[]; total: number }>;
 
   /** Retorna uma reserva por id (ou null) */
   findById(id: string): Promise<Reservation | null>;

@@ -128,7 +128,7 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
   sgMail.setApiKey(env.SENDGRID_API_KEY);
 
   // Código preferido = reservationCode; fallback = code; por fim, id
-  const codeTxt = ticket.reservationCode || ticket.code || ticket.id;
+  const codeTxt = ticket.reservationCode;
 
   // URL pública fixa para consulta
   const baseConsult = env.MAIL_CONSULT_BASE.replace(/\/$/, "");
