@@ -7,8 +7,12 @@ const prisma = new PrismaClient();
 
 function slugify(s: string) {
   return s
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)+/g, '');
 }
 
 async function seedAdmin() {
@@ -60,17 +64,14 @@ function parseUnitsFromEnv(): UnitSeed[] {
             slug: u.slug ? String(u.slug).trim() : undefined,
             isActive: typeof u.isActive === 'boolean' ? u.isActive : true,
           }))
-          .filter(u => u.name.length > 1);
+          .filter((u) => u.name.length > 1);
       }
     } catch (e) {
       console.warn('⚠️  UNITS_JSON inválido, usando defaults. Erro:', e);
     }
   }
   // Defaults simpáticos
-  return [
-    { name: 'Mané Centro' },
-    { name: 'Mané Asa Sul' },
-  ];
+  return [{ name: 'Mané Centro' }, { name: 'Mané Asa Sul' }];
 }
 
 async function seedUnits() {
@@ -91,14 +92,18 @@ async function seedUnits() {
     createdOrUpdated.push(unit);
   }
 
-  console.log(`✅ Units semeadas/atualizadas: ${createdOrUpdated.map(u => `${u.name}(${u.slug})`).join(', ') || 'nenhuma'}`);
+  console.log(
+    `✅ Units semeadas/atualizadas: ${
+      createdOrUpdated.map((u) => `${u.name}(${u.slug})`).join(', ') || 'nenhuma'
+    }`
+  );
   return createdOrUpdated;
 }
 
 async function seedAreasForUnits(units: { id: string; name: string; slug: string }[]) {
   // Templates simples de áreas por unidade (ajuste à vontade)
   const templates = [
-    { name: 'Salão',   afternoon: 30, night: 50 },
+    { name: 'Salão', afternoon: 30, night: 50 },
     { name: 'Varanda', afternoon: 20, night: 30 },
     { name: 'Mezanino', afternoon: 15, night: 25 },
   ];
@@ -128,8 +133,13 @@ async function seedAreasForUnits(units: { id: string; name: string; slug: string
   console.log(`✅ Áreas semeadas: ${created}`);
 }
 
+/**
+ * Backfill para reservations.unitId a partir dos campos legados:
+ * - tenta por slug (gerado do name legado)
+ * - depois tenta por contains no nome
+ * - se ainda assim falhar, faz match case-insensitive em JS
+ */
 async function backfillReservationUnitId() {
-  // Busca reservas com unitId nulo mas com 'unit' (legado) preenchido
   const toFix = await prisma.reservation.findMany({
     where: { unitId: null, unit: { not: null } },
     select: { id: true, unit: true },
@@ -146,15 +156,32 @@ async function backfillReservationUnitId() {
     const name = (r.unit || '').trim();
     if (!name) continue;
 
-    const u = await prisma.unit.findFirst({
-      where: { name: { equals: name, mode: 'insensitive' } },
-      select: { id: true, name: true },
-    });
+    // 1) tenta por slug
+    const guessSlug = slugify(name);
+    let unit =
+      (await prisma.unit.findUnique({
+        where: { slug: guessSlug },
+        select: { id: true, name: true, slug: true },
+      })) ||
+      // 2) tenta por "contains" no nome (sensível a caso no banco)
+      (await prisma.unit.findFirst({
+        where: { name: { contains: name } },
+        select: { id: true, name: true, slug: true },
+      }));
 
-    if (u) {
+    // 3) fallback: carrega todas e compara case-insensitive em JS
+    if (!unit) {
+      const all = await prisma.unit.findMany({ select: { id: true, name: true, slug: true } });
+      const lowered = name.toLowerCase();
+      unit =
+        all.find((u) => u.name.toLowerCase() === lowered) ||
+        all.find((u) => u.name.toLowerCase().includes(lowered));
+    }
+
+    if (unit) {
       await prisma.reservation.update({
         where: { id: r.id },
-        data: { unitId: u.id },
+        data: { unitId: unit.id },
       });
       fixCount++;
     }
