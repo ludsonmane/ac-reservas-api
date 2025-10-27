@@ -7,39 +7,36 @@ RUN apk add --no-cache openssl
 # -------- Deps (com dev) para compilar --------
 FROM base AS deps
 COPY package*.json ./
-# Evita que o postinstall rode prisma generate sem schema
-ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1
-RUN npm ci --no-audit --no-fund
+# ⚠️ NÃO rode postinstall aqui
+RUN npm ci --no-audit --no-fund --ignore-scripts
 
 # -------- Builder --------
 FROM deps AS builder
 COPY . .
-# gera o Prisma Client no build (não precisa de DATABASE_URL)
+# Gera Prisma Client (schema já existe aqui)
 RUN npx prisma generate
-# compila TS -> dist
+# Compila TS -> dist
 RUN npm run build
 
 # -------- Runner (prod) --------
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-# Evita prisma generate automático no postinstall
-ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1
 
-# só prod deps
+# Só prod deps (⚠️ sem postinstall!)
 COPY package*.json ./
-RUN npm ci --omit=dev --no-audit --no-fund
+RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts
 
-# artefatos do build
+# Artefatos do build
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
 
-# uploads locais (se usar)
+# Pasta para uploads locais (se usar)
 RUN mkdir -p /app/uploads
 
-# exponha a porta que sua app usa (ajuste se necessário)
+# Exponha a porta que sua app usa
 EXPOSE 3000
 
-# Gera client no runtime (agora com schema presente),
-# aplica migrações e inicia a API
+# No runtime: gera client (agora com schema presente), aplica migrações e inicia
+# Se você AINDA não tem migrations, troque "migrate deploy" por "db push"
 CMD sh -c "npx prisma generate && npx prisma migrate deploy && node dist/index.js"
