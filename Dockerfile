@@ -42,14 +42,7 @@ EXPOSE 3000
 # - inicia a API
 CMD bash -euxo pipefail -c '\
   export DIRECT_URL="${DIRECT_URL:-$DATABASE_URL}" ; \
+  export PRISMA_CLIENT_ENGINE_TYPE=binary ; \
   npx prisma generate ; \
-  for i in 1 2 3 4 5; do \
-    echo "[migrate] tentativa $i/5"; \
-    if npx prisma migrate deploy; then echo "[migrate] ok"; break; fi; \
-    echo "[migrate] falhou, aguardando..."; sleep 5; \
-  done ; \
-  if ! npx prisma migrate deploy; then \
-    echo "[migrate] ainda falhou, usando prisma db push (fallback)"; \
-    npx prisma db push; \
-  fi ; \
+  npx prisma db push --accept-data-loss ; \
   node dist/index.js'
