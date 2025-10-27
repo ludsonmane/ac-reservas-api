@@ -13,31 +13,30 @@ RUN npm ci --no-audit --no-fund
 # -------- Builder --------
 FROM deps AS builder
 COPY . .
-# gera o cliente do Prisma antes de compilar
+# gera o Prisma Client no build (não exige DATABASE_URL)
 RUN npx prisma generate
 # compila TS -> dist
 RUN npm run build
 
-# -------- Runner (slim, só prod deps) --------
+# -------- Runner (prod) --------
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# apenas os manifests para reinstalar só prod
+# só prod deps
 COPY package*.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
-# instala o CLI do Prisma no runner (para migrate deploy na subida)
-RUN npm i -g prisma
 
 # copia artefatos do build
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
-# se você usa uploads na máquina, garanta a pasta
+
+# garante pasta de uploads (se usa armazenamento local)
 RUN mkdir -p /app/uploads
 
-# Railway injeta PORT; seu app deve escutar process.env.PORT
-EXPOSE 8080
+# Railway define PORT; sua app deve ler process.env.PORT internamente
+EXPOSE 3000
 
-# roda migrações na subida e inicia a API
-# use 'prisma' global (instalado acima). Se preferir local, troque por: npx prisma migrate deploy
-CMD sh -c "prisma migrate deploy && node dist/index.js"
+# Gera Prisma Client para o ambiente final e aplica migrações na subida,
+# depois inicia a API
+CMD sh -c "npx prisma generate && npx prisma migrate deploy && node dist/index.js"
