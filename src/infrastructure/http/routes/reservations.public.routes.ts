@@ -28,10 +28,8 @@ function getPeriodFromDate(dt: Date): 'AFTERNOON' | 'NIGHT' {
 }
 function periodWindow(dt: Date) {
   if (getPeriodFromDate(dt) === 'NIGHT') {
-    // noite: 17:30 → 23:59:59.999
     return { from: at(dt, 17, 30), to: endOfDay(dt) };
   }
-  // tarde: 12:00 → 17:29:59.999
   return { from: at(dt, 12, 0), to: at(dt, 17, 29, 59, 999) };
 }
 
@@ -66,11 +64,6 @@ function cryptoRandom() {
 
 /* =============================================================================
    GET /v1/reservations/public/availability
-   -> Áreas com disponibilidade por unidade/data (e opcionalmente horário)
-   Query:
-   - unitId: string (obrigatório)
-   - date:   YYYY-MM-DD (opcional)
-   - time:   HH:mm      (opcional — se vier, calcula por período)
 ============================================================================= */
 router.get('/availability', async (req, res, next) => {
   try {
@@ -90,18 +83,62 @@ router.get('/availability', async (req, res, next) => {
 });
 
 /* =============================================================================
-   POST /v1/reservations/public
-   Criação pública de reserva com validação de capacidade por PERÍODO
+   GET /v1/reservations/public/by-id/:id
+   -> usado pelo front para montar o boarding pass direto
 ============================================================================= */
-/**
- * Body:
- * {
- *   fullName, cpf?, people, kids?, reservationDate (ISO), birthdayDate?,
- *   email?, phone?, notes?,
- *   unitId, areaId,
- *   utm_*..., url?, ref?, source?
- * }
- */
+router.get('/by-id/:id', async (req, res) => {
+  const { id } = req.params;
+  const r = await prisma.reservation.findUnique({
+    where: { id },
+  });
+  if (!r) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
+  return res.json(r);
+});
+
+/* =============================================================================
+   GET /v1/reservations/public/active
+   -> traz a reserva "em aberto" (AWAITING_CHECKIN / CONFIRMED / PENDING)
+      por id OU por email/phone
+============================================================================= */
+router.get('/active', async (req, res) => {
+  const id = (req.query.id as string | undefined)?.trim();
+  const email = (req.query.email as string | undefined)?.trim().toLowerCase();
+  const phone = (req.query.phone as string | undefined)?.replace(/\D+/g, '');
+
+  // por id direto
+  if (id) {
+    const r = await prisma.reservation.findUnique({ where: { id } });
+    // só conta se estiver aguardando check-in
+    if (!r || r.status !== 'AWAITING_CHECKIN') {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Nenhuma reserva ativa.' } });
+    }
+    return res.json(r);
+  }
+
+  if (!email && !phone) {
+    return res.status(400).json({ error: { code: 'VALIDATION', message: 'Informe id ou email/phone.' } });
+  }
+
+  const where: any = {
+    status: 'AWAITING_CHECKIN',
+  };
+  if (email) where.email = email;
+  if (phone) where.phone = phone;
+
+  const r = await prisma.reservation.findFirst({
+    where,
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (!r) {
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Nenhuma reserva ativa.' } });
+  }
+  return res.json(r);
+});
+
+/* =============================================================================
+   POST /v1/reservations/public
+============================================================================= */
 router.post('/', async (req, res) => {
   try {
     const {
@@ -126,7 +163,7 @@ router.post('/', async (req, res) => {
       source,
     } = req.body || {};
 
-    // validações
+    // validações básicas
     if (!fullName || String(fullName).trim().length < 3) {
       return res.status(400).json({ error: { code: 'VALIDATION', message: 'Informe o nome completo.' } });
     }
@@ -145,6 +182,37 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: { code: 'VALIDATION', message: 'reservationDate inválido.' } });
     }
 
+    const emailNorm = email ? String(email).trim().toLowerCase() : null;
+    const phoneNorm = phone ? String(phone).replace(/\D+/g, '') : null;
+
+    // 🔐 anti-duplicidade: se já tem reserva ativa para esse contato, bloqueia
+    // 🔐 anti-duplicidade: se já tem reserva aguardando check-in, bloqueia
+    if (emailNorm || phoneNorm) {
+      const existing = await prisma.reservation.findFirst({
+        where: {
+          status: 'AWAITING_CHECKIN',
+          OR: [
+            emailNorm ? { email: emailNorm } : undefined,
+            phoneNorm ? { phone: phoneNorm } : undefined,
+          ].filter(Boolean) as any[],
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (existing) {
+        return res.status(409).json({
+          error: {
+            code: 'ALREADY_HAS_ACTIVE_RESERVATION',
+            message: 'Você já tem uma reserva ativa. Faça o check-in para poder reservar de novo.',
+            reservationId: existing.id,
+            reservationCode: existing.reservationCode,
+            reservationDate: existing.reservationDate,
+            unitId: existing.unitId,
+            areaId: existing.areaId,
+          },
+        });
+      }
+    }
     // checa unidade/área
     const [unit, area] = await Promise.all([
       prisma.unit.findUnique({
@@ -156,7 +224,6 @@ router.post('/', async (req, res) => {
         select: {
           id: true,
           name: true,
-          // capacity removido do schema — não selecionar!
           capacityAfternoon: true,
           capacityNight: true,
           isActive: true,
@@ -179,13 +246,11 @@ router.post('/', async (req, res) => {
     const { from, to } = periodWindow(dt);
     const period = getPeriodFromDate(dt); // 'AFTERNOON' | 'NIGHT'
 
-    // capacidade do período (sem fallback para diário, já removido)
     const maxPeriod =
       period === 'AFTERNOON'
         ? (area.capacityAfternoon ?? 0)
         : (area.capacityNight ?? 0);
 
-    // soma só reservas que consomem capacidade
     const grouped = await prisma.reservation.groupBy({
       by: ['areaId'],
       where: {
@@ -198,7 +263,6 @@ router.post('/', async (req, res) => {
 
     const alreadyUsed = (grouped[0]?._sum.people ?? 0) + (grouped[0]?._sum.kids ?? 0);
 
-    // requisitado (conta UMA vez só)
     const willUse = Math.max(0, Math.floor(peopleNum)) + Math.max(0, Math.floor(kidsNum));
     const remaining = Math.max(0, maxPeriod - alreadyUsed);
 
@@ -232,14 +296,14 @@ router.post('/', async (req, res) => {
         reservationDate: dt,
         birthdayDate: birthdayDate ? new Date(birthdayDate) : null,
 
-        phone: phone ? String(phone) : null,
-        email: email ? String(email) : null,
+        phone: phoneNorm,
+        email: emailNorm,
         notes: notes ? String(notes) : null,
 
         unitId: unit.id,
-        unit: unit.name,       // denormalização para compat
+        unit: unit.name,
         areaId: area.id,
-        areaName: area.name,   // denormalização para compat
+        areaName: area.name,
 
         utm_source: utm_source ?? null,
         utm_medium: utm_medium ?? null,
@@ -256,7 +320,7 @@ router.post('/', async (req, res) => {
         qrExpiresAt,
         status: 'AWAITING_CHECKIN',
       },
-      select: { id: true, reservationCode: true },
+      select: { id: true, reservationCode: true, status: true },
     });
 
     return res.status(201).json(created);
