@@ -39,7 +39,7 @@ function isValidHHmm(input?: string) {
   return /^\d{2}:\d{2}$/.test(input);
 }
 
-/** Força janelas do negócio (tarde/noite). < 12:00 cai em AFTERNOON. */
+/** Janela de negócio */
 function clampToBusinessWindow(hhmm: string): 'AFTERNOON' | 'NIGHT' {
   const [hh, mm] = hhmm.split(':').map(Number);
   const mins = (hh || 0) * 60 + (mm || 0);
@@ -57,27 +57,38 @@ function periodWindow(dt: Date, hhmm: string) {
   return { from: at(dt, 12, 0), to: at(dt, 17, 29, 59, 999), period };
 }
 
-/* ---------------- Foto: normalização e fallback ---------------- */
+/* ---------------- Foto: normalização ---------------- */
 function normalizePhotoUrl(raw?: string | null): string | null {
   if (!raw) return null;
   const v = String(raw).trim();
   if (!v) return null;
-  // já é absoluta (http/https) ou data URI
+  // absoluta (http/https) ou data URI
   if (/^(https?:)?\/\//i.test(v) || v.startsWith('data:')) return v;
+
+  // prefixo configurável (API)
   const base =
     process.env.PUBLIC_IMAGES_BASE ||
     process.env.CDN_BASE_URL ||
-    ''; // se quiser, coloque aqui seu domínio padrão
+    '';
+
   if (!base) {
-    // devolve como caminho relativo mesmo
+    // devolve relativo mesmo
     return v.startsWith('/') ? v : `/${v}`;
   }
+
   const b = base.replace(/\/+$/, '');
   const p = v.replace(/^\/+/, '');
   return `${b}/${p}`;
 }
 
 export const areasService = {
+  /**
+   * Lista áreas ativas de uma unidade.
+   * - Se `dateISO` vier, soma (people + kids).
+   * - Se vier também `timeHHmm`, usa janela do PERÍODO (tarde/noite) e
+   *   aplica a capacidade específica (capacityAfternoon / capacityNight).
+   * - Sem `timeHHmm` → capacidade diária = (capacityAfternoon ?? 0) + (capacityNight ?? 0).
+   */
   async listByUnitPublic(
     unitId: string,
     dateISO?: string,
@@ -85,31 +96,27 @@ export const areasService = {
   ): Promise<AreaPublicDTO[]> {
     if (!unitId) return [];
 
-    // inclui possíveis campos legados + os novos
+    // ⚠️ somente campos existentes no modelo
     const areas = await prisma.area.findMany({
       where: { unitId, isActive: true },
       select: {
         id: true,
         name: true,
-        photoUrl: true,
-        // @ts-ignore - se existir no schema, trará; se não existir, TS ignora e o Prisma descarta
-        photo: true,
+        photoUrl: true,              // existe
         capacityAfternoon: true,
         capacityNight: true,
         isActive: true,
-        description: true,
-        iconEmoji: true,
+        description: true,           // existe
+        iconEmoji: true,             // existe
       },
       orderBy: { name: 'asc' },
     });
 
-    // resolve foto (photoUrl -> photo -> null)
-    const withResolvedPhoto = areas.map((a) => {
-      const rawPhoto =
-        (a as any).photoUrl ?? (a as any).photo ?? null;
-      const resolved = normalizePhotoUrl(rawPhoto);
-      return { ...a, photoUrl: resolved } as AreaPublicDTO;
-    });
+    // normaliza a foto
+    const withResolvedPhoto: AreaPublicDTO[] = areas.map((a) => ({
+      ...a,
+      photoUrl: normalizePhotoUrl(a.photoUrl),
+    }));
 
     // Sem data → “estático”
     if (!dateISO) {
@@ -119,7 +126,7 @@ export const areasService = {
     const parsed = dayjs(dateISO, 'YYYY-MM-DD', true);
     const base = parsed.isValid() ? parsed.toDate() : new Date();
 
-    // Período
+    // Período (timeHHmm)
     if (timeHHmm) {
       const safeTime = isValidHHmm(timeHHmm) ? timeHHmm : '12:00';
       const { from, to, period } = periodWindow(base, safeTime);
