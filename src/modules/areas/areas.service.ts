@@ -10,14 +10,13 @@ export type AreaPublicDTO = {
   photoUrl?: string | null;
   isActive: boolean;
 
-  // ✅ novos campos para o front
+  // extras pro front
   description?: string | null;
   iconEmoji?: string | null;
 
-  /** capacidade restante (diária ou do período, dependendo se veio `timeHHmm`) */
   remaining?: number;
-  available?: number;     // alias de remaining
-  isAvailable?: boolean;  // > 0
+  available?: number;
+  isAvailable?: boolean;
 };
 
 /* ---------------- Helpers de data/tempo ---------------- */
@@ -32,7 +31,7 @@ function at(d: Date, hh: number, mm: number, ss = 0, ms = 0) {
 }
 
 /** 17:30 → corte do período da NOITE */
-const EVENING_CUTOFF_MIN = 17 * 60 + 30; // 17:30
+const EVENING_CUTOFF_MIN = 17 * 60 + 30;
 
 /** HH:mm válido (ex.: 09:05, 17:30) */
 function isValidHHmm(input?: string) {
@@ -47,13 +46,9 @@ function clampToBusinessWindow(hhmm: string): 'AFTERNOON' | 'NIGHT' {
   if (mins < 12 * 60) return 'AFTERNOON';
   return mins >= EVENING_CUTOFF_MIN ? 'NIGHT' : 'AFTERNOON';
 }
-
-/** Determina período a partir de HH:mm (com clamp para janela de negócio) */
 function getPeriodFromHM(hhmm: string) {
   return clampToBusinessWindow(hhmm);
 }
-
-/** Janela [from,to] do período na data base */
 function periodWindow(dt: Date, hhmm: string) {
   const period = getPeriodFromHM(hhmm);
   if (period === 'NIGHT') {
@@ -62,14 +57,27 @@ function periodWindow(dt: Date, hhmm: string) {
   return { from: at(dt, 12, 0), to: at(dt, 17, 29, 59, 999), period };
 }
 
+/* ---------------- Foto: normalização e fallback ---------------- */
+function normalizePhotoUrl(raw?: string | null): string | null {
+  if (!raw) return null;
+  const v = String(raw).trim();
+  if (!v) return null;
+  // já é absoluta (http/https) ou data URI
+  if (/^(https?:)?\/\//i.test(v) || v.startsWith('data:')) return v;
+  const base =
+    process.env.PUBLIC_IMAGES_BASE ||
+    process.env.CDN_BASE_URL ||
+    ''; // se quiser, coloque aqui seu domínio padrão
+  if (!base) {
+    // devolve como caminho relativo mesmo
+    return v.startsWith('/') ? v : `/${v}`;
+  }
+  const b = base.replace(/\/+$/, '');
+  const p = v.replace(/^\/+/, '');
+  return `${b}/${p}`;
+}
+
 export const areasService = {
-  /**
-   * Lista áreas ativas de uma unidade.
-   * - Se `dateISO` vier, soma (people + kids).
-   * - Se TAMBÉM vier `timeHHmm`, usa janela do PERÍODO (tarde/noite) e
-   *   aplica a capacidade específica do período (capacityAfternoon / capacityNight).
-   * - Sem `timeHHmm` → capacidade DIÁRIA = (capacityAfternoon ?? 0) + (capacityNight ?? 0).
-   */
   async listByUnitPublic(
     unitId: string,
     dateISO?: string,
@@ -77,34 +85,41 @@ export const areasService = {
   ): Promise<AreaPublicDTO[]> {
     if (!unitId) return [];
 
-    // ✅ Seleciona também description e iconEmoji
+    // inclui possíveis campos legados + os novos
     const areas = await prisma.area.findMany({
       where: { unitId, isActive: true },
       select: {
         id: true,
         name: true,
         photoUrl: true,
+        // @ts-ignore - se existir no schema, trará; se não existir, TS ignora e o Prisma descarta
+        photo: true,
         capacityAfternoon: true,
         capacityNight: true,
         isActive: true,
-        description: true, // 👈
-        iconEmoji: true,   // 👈
+        description: true,
+        iconEmoji: true,
       },
       orderBy: { name: 'asc' },
     });
 
-    // Sem data → devolve apenas dados “estáticos” (incluindo descrição/emoji)
+    // resolve foto (photoUrl -> photo -> null)
+    const withResolvedPhoto = areas.map((a) => {
+      const rawPhoto =
+        (a as any).photoUrl ?? (a as any).photo ?? null;
+      const resolved = normalizePhotoUrl(rawPhoto);
+      return { ...a, photoUrl: resolved } as AreaPublicDTO;
+    });
+
+    // Sem data → “estático”
     if (!dateISO) {
-      return areas.map(a => ({
-        ...a,
-        // sem available/remaining quando não há data
-      }));
+      return withResolvedPhoto;
     }
 
     const parsed = dayjs(dateISO, 'YYYY-MM-DD', true);
     const base = parsed.isValid() ? parsed.toDate() : new Date();
 
-    // Se veio horário, calculamos por PERÍODO; caso contrário, por DIA inteiro
+    // Período
     if (timeHHmm) {
       const safeTime = isValidHHmm(timeHHmm) ? timeHHmm : '12:00';
       const { from, to, period } = periodWindow(base, safeTime);
@@ -125,7 +140,7 @@ export const areasService = {
         if (g.areaId) usedMap.set(g.areaId, used);
       }
 
-      return areas.map((a) => {
+      return withResolvedPhoto.map((a) => {
         const periodCap =
           period === 'AFTERNOON'
             ? (a.capacityAfternoon ?? 0)
@@ -133,7 +148,7 @@ export const areasService = {
         const used = usedMap.get(a.id) ?? 0;
         const available = Math.max(0, periodCap - used);
         return {
-          ...a, // mantém description e iconEmoji
+          ...a,
           remaining: available,
           available,
           isAvailable: available > 0,
@@ -141,7 +156,7 @@ export const areasService = {
       });
     }
 
-    // Sem timeHHmm → considerar o DIA inteiro
+    // Dia inteiro
     const from = startOfDay(base);
     const to = endOfDay(base);
 
@@ -161,12 +176,12 @@ export const areasService = {
       if (g.areaId) usedMap.set(g.areaId, used);
     }
 
-    return areas.map((a) => {
+    return withResolvedPhoto.map((a) => {
       const dayCap = (a.capacityAfternoon ?? 0) + (a.capacityNight ?? 0);
       const used = usedMap.get(a.id) ?? 0;
       const available = Math.max(0, dayCap - used);
       return {
-        ...a, // mantém description e iconEmoji
+        ...a,
         remaining: available,
         available,
         isAvailable: available > 0,
