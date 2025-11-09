@@ -9,6 +9,11 @@ export type AreaPublicDTO = {
   capacityNight?: number | null;
   photoUrl?: string | null;
   isActive: boolean;
+
+  // ✅ novos campos para o front
+  description?: string | null;
+  iconEmoji?: string | null;
+
   /** capacidade restante (diária ou do período, dependendo se veio `timeHHmm`) */
   remaining?: number;
   available?: number;     // alias de remaining
@@ -72,7 +77,7 @@ export const areasService = {
   ): Promise<AreaPublicDTO[]> {
     if (!unitId) return [];
 
-    // carrega áreas ativas com os campos necessários (sem 'capacity')
+    // ✅ Seleciona também description e iconEmoji
     const areas = await prisma.area.findMany({
       where: { unitId, isActive: true },
       select: {
@@ -80,15 +85,20 @@ export const areasService = {
         name: true,
         photoUrl: true,
         capacityAfternoon: true,
-        capacityNight: true, // nome correto
+        capacityNight: true,
         isActive: true,
+        description: true, // 👈
+        iconEmoji: true,   // 👈
       },
       orderBy: { name: 'asc' },
     });
 
-    // Sem data → devolve apenas dados “estáticos”
+    // Sem data → devolve apenas dados “estáticos” (incluindo descrição/emoji)
     if (!dateISO) {
-      return areas;
+      return areas.map(a => ({
+        ...a,
+        // sem available/remaining quando não há data
+      }));
     }
 
     const parsed = dayjs(dateISO, 'YYYY-MM-DD', true);
@@ -96,12 +106,9 @@ export const areasService = {
 
     // Se veio horário, calculamos por PERÍODO; caso contrário, por DIA inteiro
     if (timeHHmm) {
-      // Blindagem: se HH:mm inválido, normaliza para 12:00 (início da tarde)
       const safeTime = isValidHHmm(timeHHmm) ? timeHHmm : '12:00';
-
       const { from, to, period } = periodWindow(base, safeTime);
 
-      // soma (people+kids) por área no período
       const grouped = await prisma.reservation.groupBy({
         by: ['areaId'],
         where: {
@@ -126,7 +133,7 @@ export const areasService = {
         const used = usedMap.get(a.id) ?? 0;
         const available = Math.max(0, periodCap - used);
         return {
-          ...a,
+          ...a, // mantém description e iconEmoji
           remaining: available,
           available,
           isAvailable: available > 0,
@@ -155,12 +162,11 @@ export const areasService = {
     }
 
     return areas.map((a) => {
-      // capacidade "diária" = soma das capacidades dos dois períodos
       const dayCap = (a.capacityAfternoon ?? 0) + (a.capacityNight ?? 0);
       const used = usedMap.get(a.id) ?? 0;
       const available = Math.max(0, dayCap - used);
       return {
-        ...a,
+        ...a, // mantém description e iconEmoji
         remaining: available,
         available,
         isAvailable: available > 0,
