@@ -59,16 +59,11 @@ model Area {
   id     String @id @default(uuid()) @db.VarChar(36)
   unitId String @db.VarChar(36)
   unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
-
   name       String  @db.VarChar(191)
   photoUrl   String?
   isActive   Boolean @default(true)
-
-  // NOVOS CAMPOS
   iconEmoji   String?   @db.VarChar(16)   // ex.: "🍺", "🎸", "🪑"
   description String?   @db.Text
-
-  // Capacidades por período (podem ser nulas)
   capacityAfternoon Int?
   capacityNight     Int?
 
