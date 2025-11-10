@@ -326,7 +326,7 @@ export class PrismaReservationRepository implements ReservationRepository {
     await prisma.reservation.delete({ where: { id } });
   }
 
-  // ✅ NOVO: inserir convidados em massa
+  // ✅ NOVO: inserir convidados em massa (usa prisma.guest)
   async addGuestsBulk(reservationId: string, guests: GuestInput[]) {
     // Verifica se a reserva existe
     const exists = await prisma.reservation.findUnique({
@@ -337,24 +337,29 @@ export class PrismaReservationRepository implements ReservationRepository {
       throw new Error('RESERVATION_NOT_FOUND');
     }
 
-    // Normaliza / filtra
-    const data = guests
-      .map((g) => ({
-        reservationId,
-        name: (g.name ?? '').trim(),
-        email: (g.email ?? '').trim().toLowerCase(),
-        role: ((g.role ?? 'GUEST') as 'GUEST' | 'HOST') as GuestRole,
-      }))
-      .filter((g) => g.name.length >= 2 && g.email.length >= 5);
+    // Normaliza / filtra e deduplica por e-mail no payload
+    const seen = new Set<string>();
+    const normalized = guests
+      .map((g) => {
+        const name = (g.name ?? '').trim();
+        const email = (g.email ?? '').trim().toLowerCase();
+        const role: GuestRole = (g.role ?? 'GUEST') as GuestRole;
+        return { reservationId, name, email, role };
+      })
+      .filter((g) => g.name.length >= 2 && g.email.length >= 5)
+      .filter((g) => {
+        if (seen.has(g.email)) return false;
+        seen.add(g.email);
+        return true;
+      });
 
-    if (data.length === 0) {
+    if (normalized.length === 0) {
       return { created: 0, skipped: guests.length };
     }
 
-    // Insere em massa — requer @@unique([reservationId, email]) no Prisma
     const result = await prisma.guest.createMany({
-      data,
-      skipDuplicates: true,
+      data: normalized,
+      skipDuplicates: true, // exige UNIQUE(reservationId, email)
     });
 
     const created = result.count;
