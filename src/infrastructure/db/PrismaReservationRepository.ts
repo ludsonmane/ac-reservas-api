@@ -1,8 +1,9 @@
 // api/src/infrastructure/db/PrismaReservationRepository.ts
 import { prisma } from './prisma';
-import { Prisma } from '@prisma/client';
+import { Prisma, GuestRole } from '@prisma/client';
 import crypto from 'crypto';
 import { ReservationRepository, FindManyParams } from '../../application/ports/ReservationRepository';
+import type { GuestInput } from '../../application/ports/ReservationRepository';
 
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sem I, O, 0, 1 p/ evitar confusão
 function genCode(len = 6) {
@@ -85,7 +86,7 @@ export class PrismaReservationRepository implements ReservationRepository {
       people:
         typeof data?.people === 'number'
           ? Math.max(1, Math.trunc(data.people))
-          : Math.max(1, Number.isFinite(Number(data?.people)) ? Math.trunc(Number(data.people)) : 1),
+          : Math.max(1, Number.isFinite(Number(data?.people)) ? Math.trunc(Number(data?.people)) : 1),
 
       // datas
       reservationDate:
@@ -323,5 +324,41 @@ export class PrismaReservationRepository implements ReservationRepository {
 
   async delete(id: string) {
     await prisma.reservation.delete({ where: { id } });
+  }
+
+  // ✅ NOVO: inserir convidados em massa
+  async addGuestsBulk(reservationId: string, guests: GuestInput[]) {
+    // Verifica se a reserva existe
+    const exists = await prisma.reservation.findUnique({
+      where: { id: reservationId },
+      select: { id: true }
+    });
+    if (!exists) {
+      throw new Error('RESERVATION_NOT_FOUND');
+    }
+
+    // Normaliza / filtra
+    const data = guests
+      .map((g) => ({
+        reservationId,
+        name: (g.name ?? '').trim(),
+        email: (g.email ?? '').trim().toLowerCase(),
+        role: ((g.role ?? 'GUEST') as 'GUEST' | 'HOST') as GuestRole,
+      }))
+      .filter((g) => g.name.length >= 2 && g.email.length >= 5);
+
+    if (data.length === 0) {
+      return { created: 0, skipped: guests.length };
+    }
+
+    // Insere em massa — requer @@unique([reservationId, email]) no Prisma
+    const result = await prisma.guest.createMany({
+      data,
+      skipDuplicates: true,
+    });
+
+    const created = result.count;
+    const skipped = guests.length - created;
+    return { created, skipped };
   }
 }
