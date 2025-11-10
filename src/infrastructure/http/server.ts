@@ -14,6 +14,7 @@ import { notFound } from './middlewares/notFound';
 import { errorHandler } from './middlewares/errorHandler';
 
 // Rotas
+
 import authRoutes from './routes/auth.routes';
 import { reservationsRouter } from './routes/reservations.routes';
 import { reservationsPublicRouter } from './routes/reservations.public.routes';
@@ -140,14 +141,12 @@ export function buildServer() {
   //    Exemplos:
   //      POST /v1/reservations/:id/guests
   //      POST /v1/reservations/:id/guests/bulk
-  app.use('/v1/reservations', reservationsGuestsRouter);
-  app.use('/v1/reservations/public', reservationsGuestsRouter);
-
   // Auth
   app.use('/auth', authRoutes);
 
   // Rotas privadas/admin
   app.use('/v1/reservations', reservationsRouter);
+  app.use('/v1/reservations', reservationsGuestsRouter);
   app.use('/v1/areas', areasRouter);
   app.use('/v1/areas', areasUploadRouter); // upload de foto de área
   app.use('/v1/units', unitsRouter);
