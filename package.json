@@ -11,25 +11,22 @@
   },
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only --files src/index.ts",
-
     "// local-only helpers": "------------------------------------------------",
     "db:gen": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
-
     "// CI/Buildpack compat (Railway)": "--------------------------------------",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
-
     "// build/start (prod)": "------------------------------------------------",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "lint": "echo \"add eslint if you want\"",
-
     "// optional: ensure prisma client on install": "---------------------------",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
     "@prisma/client": "^6.16.3",
@@ -40,10 +37,10 @@
     "cors": "^2.8.5",
     "dayjs": "^1.11.18",
     "dotenv": "^16.4.5",
-    "multer": "^2.0.0",
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.0",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
     "prisma": "^6.16.3",
