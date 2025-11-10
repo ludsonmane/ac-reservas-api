@@ -24,6 +24,9 @@ import { unitsPublicRouter } from './routes/units.public.routes';
 import areasUploadRouter from './routes/areas.upload.routes';
 import { usersRouter } from './routes/users.routes';
 
+// ✅ novo: rotas de convidados de reserva
+import reservationsGuestsRouter from './routes/reservations.guests.routes';
+
 function parseOrigins(value?: string): (string | RegExp)[] {
   if (!value) return [];
   return value
@@ -89,9 +92,8 @@ export function buildServer() {
   };
 
   app.use(cors(corsOptions));
-  // ✅ alternativa opcional, compatível:
-app.options(/.*/, cors(corsOptions) as any);
-
+  // ✅ preflight para qualquer rota
+  app.options(/.*/, cors(corsOptions) as any);
 
   // Static: /uploads (fotos de áreas)
   const uploadsDir = path.resolve(process.cwd(), 'uploads');
@@ -133,6 +135,13 @@ app.options(/.*/, cors(corsOptions) as any);
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
   app.use('/v1/units/public', unitsPublicRouter);
+
+  // ✅ Rotas de CONVIDADOS (disponíveis em /v1/reservations e também como alias em /v1/reservations/public)
+  //    Exemplos:
+  //      POST /v1/reservations/:id/guests
+  //      POST /v1/reservations/:id/guests/bulk
+  app.use('/v1/reservations', reservationsGuestsRouter);
+  app.use('/v1/reservations/public', reservationsGuestsRouter);
 
   // Auth
   app.use('/auth', authRoutes);
