@@ -150,6 +150,7 @@ model Reservation {
   @@index([areaId, createdAt])
 }
 
+
 model Guest {
   id            String       @id @default(uuid()) @db.VarChar(36)
   reservationId String       @db.VarChar(36)
