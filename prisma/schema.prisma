@@ -61,14 +61,15 @@ model Unit {
 }
 
 model Area {
-  id     String @id @default(uuid()) @db.VarChar(36)
-  unitId String @db.VarChar(36)
-  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
-  name       String  @db.VarChar(191)
-  photoUrl   String?
-  isActive   Boolean @default(true)
-  iconEmoji   String?   @db.VarChar(16)   // ex.: "🍺", "🎸", "🪑"
-  description String?   @db.Text
+  id       String @id @default(uuid()) @db.VarChar(36)
+  unitId   String @db.VarChar(36)
+  unit     Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  name     String  @db.VarChar(191)
+  photoUrl String?
+  isActive Boolean @default(true)
+
+  iconEmoji        String? @db.VarChar(16) // ex.: "🍺", "🎸", "🪑"
+  description      String? @db.Text
   capacityAfternoon Int?
   capacityNight     Int?
 
@@ -135,8 +136,8 @@ model Reservation {
   checkedInAt DateTime?
   checkedInBy String?           @db.VarChar(64)
 
-  /// >>> NOVO: relação com convidados da reserva
-  guests ReservationGuest[]
+  /// relação com convidados da reserva
+  guests Guest[]
 
   @@index([reservationDate])
   @@index([createdAt])
@@ -149,19 +150,21 @@ model Reservation {
   @@index([areaId, createdAt])
 }
 
-model ReservationGuest {
-  id            String    @id @default(uuid()) @db.VarChar(36)
-  reservationId String    @db.VarChar(36)
-  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+model Guest {
+  id            String       @id @default(uuid()) @db.VarChar(36)
+  reservationId String       @db.VarChar(36)
+  reservation   Reservation  @relation(fields: [reservationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
-  name  String   @db.VarChar(200)
-  email String   @db.VarChar(200)
+  name  String    @db.VarChar(200)
+  email String    @db.VarChar(200)
   role  GuestRole @default(GUEST)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([reservationId, email]) // evita duplicatas por reserva + email
-  @@index([reservationId])
-  @@index([email])
+  @@unique([reservationId, email], map: "guest_reservation_email_unique")
+  @@index([reservationId], map: "guest_reservation_idx")
+  @@index([email], map: "guest_email_idx")
+
+  @@map("guest")
 }
