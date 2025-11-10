@@ -33,3 +33,19 @@ export interface ReservationRepository {
   /** Exclui a reserva */
   delete(id: string): Promise<void>;
 }
+
+
+export type GuestInput = {
+  name: string;
+  email: string;
+  role?: 'GUEST' | 'HOST';
+};
+
+export interface ReservationRepository {
+  // ... (tudo que já existe)
+
+  addGuestsBulk(reservationId: string, guests: GuestInput[]): Promise<{
+    created: number;
+    skipped: number;
+  }>;
+}

@@ -22,6 +22,11 @@ enum ReservationStatus {
   CHECKED_IN
 }
 
+enum GuestRole {
+  GUEST
+  HOST
+}
+
 /**
  * ===== Models =====
  */
@@ -130,6 +135,9 @@ model Reservation {
   checkedInAt DateTime?
   checkedInBy String?           @db.VarChar(64)
 
+  /// >>> NOVO: relação com convidados da reserva
+  guests ReservationGuest[]
+
   @@index([reservationDate])
   @@index([createdAt])
   @@index([utm_source, utm_campaign])
@@ -139,4 +147,21 @@ model Reservation {
   @@index([reservationCode])
   @@index([unitId, createdAt])
   @@index([areaId, createdAt])
+}
+
+model ReservationGuest {
+  id            String    @id @default(uuid()) @db.VarChar(36)
+  reservationId String    @db.VarChar(36)
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  name  String   @db.VarChar(200)
+  email String   @db.VarChar(200)
+  role  GuestRole @default(GUEST)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([reservationId, email]) // evita duplicatas por reserva + email
+  @@index([reservationId])
+  @@index([email])
 }

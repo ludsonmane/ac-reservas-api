@@ -1,10 +1,13 @@
 // src/infrastructure/http/routes/reservations.public.routes.ts
 import { Router } from 'express';
 import dayjs from 'dayjs';
+import { z } from 'zod';
+import utc from 'dayjs/plugin/utc';
 import { prisma } from '../../db/client';
 import { areasService } from '../../../modules/areas/areas.service';
 
 const router = Router();
+dayjs.extend(utc);
 
 /* =============================================================================
    Helpers
@@ -61,6 +64,8 @@ function cryptoRandom() {
   const crypto = require('crypto');
   return crypto.randomBytes(16).toString('hex');
 }
+const toLowerEmail = (v?: string | null) =>
+  (v ?? '').trim().toLowerCase() || null;
 
 /* =============================================================================
    GET /v1/reservations/public/availability
@@ -102,7 +107,7 @@ router.get('/by-id/:id', async (req, res) => {
 ============================================================================= */
 router.get('/active', async (req, res) => {
   const id = (req.query.id as string | undefined)?.trim();
-  const email = (req.query.email as string | undefined)?.trim().toLowerCase();
+  const email = toLowerEmail(req.query.email as any);
   const phone = (req.query.phone as string | undefined)?.replace(/\D+/g, '');
 
   // por id direto
@@ -182,11 +187,10 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: { code: 'VALIDATION', message: 'reservationDate inválido.' } });
     }
 
-    const emailNorm = email ? String(email).trim().toLowerCase() : null;
+    const emailNorm = toLowerEmail(email);
     const phoneNorm = phone ? String(phone).replace(/\D+/g, '') : null;
 
     // 🔐 anti-duplicidade: se já tem reserva ativa para esse contato, bloqueia
-    // 🔐 anti-duplicidade: se já tem reserva aguardando check-in, bloqueia
     if (emailNorm || phoneNorm) {
       const existing = await prisma.reservation.findFirst({
         where: {
@@ -328,6 +332,121 @@ router.post('/', async (req, res) => {
     console.error('[reservations.public] error:', e);
     return res.status(500).json({ error: { code: 'INTERNAL', message: 'Falha ao criar reserva.' } });
   }
+});
+
+/* =============================================================================
+   NOVO: POST /v1/reservations/public/:id/guests/bulk
+   - Insere convidados (GUEST/HOST) em massa para a reserva informada
+   - Requer schema Guest no Prisma com @@unique([reservationId, email])
+============================================================================= */
+router.post('/:id/guests/bulk', async (req, res) => {
+  const reservationId = String(req.params.id || '').trim();
+  if (!reservationId) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Missing reservation id' } });
+
+  const Email = z.string().trim().toLowerCase().email();
+  const GuestSchema = z.object({
+    name: z.string().trim().min(2, 'name too short').max(200),
+    email: Email,
+    role: z.enum(['GUEST', 'HOST']).optional().default('GUEST'),
+  });
+  const BodySchema = z.object({
+    guests: z.array(GuestSchema).min(1).max(1000),
+  });
+
+  const parsed = BodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  // garante que a reserva existe
+  const exists = await prisma.reservation.findUnique({
+    where: { id: reservationId },
+    select: { id: true },
+  });
+  if (!exists) return res.status(404).json({ error: { code: 'RESERVATION_NOT_FOUND' } });
+
+  const data = parsed.data.guests.map((g) => ({
+    reservationId,
+    name: g.name.trim(),
+    email: g.email.trim().toLowerCase(),
+    role: g.role, // 'GUEST' | 'HOST'
+  }));
+
+  try {
+    const result = await prisma.guest.createMany({
+      data,
+      skipDuplicates: true,
+    });
+    const created = result.count;
+    const skipped = data.length - created;
+    return res.status(200).json({ created, skipped });
+  } catch (err: any) {
+    if (err?.code === 'P2003') {
+      return res.status(400).json({ error: { code: 'FOREIGN_KEY_CONSTRAINT' } });
+    }
+    console.error('[reservations.public.guests.bulk] error:', err);
+    return res.status(500).json({ error: { code: 'INTERNAL' } });
+  }
+});
+
+/* =============================================================================
+   NOVO: GET /v1/reservations/public/:id/meet-link
+   - Retorna uma URL do Google Calendar (action=TEMPLATE) com título, horário e e-mails
+   - O Meet é criado pelo Google ao salvar o evento
+============================================================================= */
+router.get('/:id/meet-link', async (req, res) => {
+  const reservationId = String(req.params.id || '').trim();
+  if (!reservationId) return res.status(400).json({ error: { code: 'VALIDATION', message: 'Missing reservation id' } });
+
+  const r = await prisma.reservation.findUnique({
+    where: { id: reservationId },
+    select: {
+      id: true,
+      fullName: true,
+      email: true,
+      reservationDate: true,
+      unit: true,
+      unitId: true,
+      areaName: true,
+    },
+  });
+  if (!r) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
+
+  // pega e-mails dos convidados + titular (se tiver email)
+  const guests = await prisma.guest.findMany({
+    where: { reservationId },
+    select: { email: true },
+  });
+
+  const emails = [
+    toLowerEmail(r.email),
+    ...guests.map((g) => toLowerEmail(g.email)).filter(Boolean),
+  ].filter(Boolean) as string[];
+
+  // monta URL do Google Calendar
+  const start = dayjs(r.reservationDate);
+  const end = start.add(2, 'hour'); // duração padrão 2h
+  const fmt = (d: dayjs.Dayjs) => d.utc().format('YYYYMMDD[T]HHmmss[Z]'); // formato aceito pelo Calendar
+
+  const text = `RESERVA DO ${r.fullName?.toUpperCase?.() || 'CLIENTE'} NO MANÉ MERCADO`;
+  const details = [
+    r.unit ? `Unidade: ${r.unit}` : null,
+    r.areaName ? `Área: ${r.areaName}` : null,
+    `Gerado automaticamente pelo site.`,
+  ]
+    .filter(Boolean)
+    .join('\\n');
+
+  const base = 'https://calendar.google.com/calendar/render?action=TEMPLATE';
+  const params = new URLSearchParams();
+  params.set('text', text);
+  params.set('dates', `${fmt(start)}/${fmt(end)}`);
+  if (emails.length) params.set('add', emails.join(','));
+  params.set('details', details);
+  params.set('location', 'Google Meet (gerado ao salvar)');
+
+  const url = `${base}&${params.toString()}`;
+  return res.json({ url });
 });
 
 /* =============================================================================
