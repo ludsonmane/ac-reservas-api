@@ -14,7 +14,6 @@ import { notFound } from './middlewares/notFound';
 import { errorHandler } from './middlewares/errorHandler';
 
 // Rotas
-
 import authRoutes from './routes/auth.routes';
 import { reservationsRouter } from './routes/reservations.routes';
 import { reservationsPublicRouter } from './routes/reservations.public.routes';
@@ -24,8 +23,7 @@ import { areasPublicRouter } from './routes/areas.public.routes';
 import { unitsPublicRouter } from './routes/units.public.routes';
 import areasUploadRouter from './routes/areas.upload.routes';
 import { usersRouter } from './routes/users.routes';
-
-// ✅ novo: rotas de convidados de reserva
+// ✅ convidados
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
 
 function parseOrigins(value?: string): (string | RegExp)[] {
@@ -36,11 +34,7 @@ function parseOrigins(value?: string): (string | RegExp)[] {
     .filter(Boolean)
     .map((v) => {
       if (v.startsWith('/') && v.endsWith('/')) {
-        try {
-          return new RegExp(v.slice(1, -1));
-        } catch {
-          /* regex inválida -> ignora */
-        }
+        try { return new RegExp(v.slice(1, -1)); } catch {}
       }
       return v;
     });
@@ -49,7 +43,7 @@ function parseOrigins(value?: string): (string | RegExp)[] {
 export function buildServer() {
   const app = express();
 
-  // Atrás de proxy (Railway / Nginx)
+  // Proxy (Railway / Nginx)
   app.set('trust proxy', 1);
 
   // Parsers
@@ -67,23 +61,20 @@ export function buildServer() {
       crossOriginEmbedderPolicy: false,
       frameguard: { action: 'deny' },
       referrerPolicy: { policy: 'no-referrer' },
-      hsts:
-        process.env.NODE_ENV === 'production'
-          ? { maxAge: 60 * 60 * 24 * 180, includeSubDomains: true, preload: true }
-          : false,
+      hsts: process.env.NODE_ENV === 'production'
+        ? { maxAge: 60 * 60 * 24 * 180, includeSubDomains: true, preload: true }
+        : false,
     })
   );
 
   // CORS
   const origins = parseOrigins(process.env.CORS_ORIGIN);
   if (origins.length === 0) {
-    // defaults de dev
     origins.push('http://localhost:3000', 'http://localhost:5173');
   }
-
   const corsOptions: CorsOptions = {
     origin(origin, cb) {
-      if (!origin) return cb(null, true); // curl/postman
+      if (!origin) return cb(null, true);
       const ok = origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin));
       return ok ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
     },
@@ -91,62 +82,68 @@ export function buildServer() {
     credentials: true,
     optionsSuccessStatus: 204,
   };
-
   app.use(cors(corsOptions));
-  // ✅ preflight para qualquer rota
   app.options(/.*/, cors(corsOptions) as any);
 
-  // Static: /uploads (fotos de áreas)
-  const uploadsDir = path.resolve(process.cwd(), 'uploads');
-  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+  // === Static: /uploads (fotos etc.) ===
+  // Use env UPLOADS_DIR para casar com Multer/NGINX. Fallback: ./uploads
+  const UPLOADS_DIR = process.env.UPLOADS_DIR
+    ? path.resolve(process.env.UPLOADS_DIR)
+    : path.resolve(process.cwd(), 'uploads');
+
+  // garante pastas
+  for (const sub of ['areas', 'units', 'temp']) {
+    const dir = path.join(UPLOADS_DIR, sub);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  }
+
+  // cabeçalhos de mídia antes do static
+  app.use('/uploads', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+  });
 
   app.use(
     '/uploads',
-    (req, res, next) => {
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-      next();
-    },
-    express.static(uploadsDir, {
+    express.static(UPLOADS_DIR, {
+      fallthrough: false, // se não achar arquivo, retorna 404 aqui (não cai nas rotas)
       index: false,
-      maxAge: '7d',
+      extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
+      setHeaders(res) {
+        res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      },
     })
   );
 
   // Logs HTTP
   app.use(pinoHttp({ logger }));
 
-  // Limiter (v7 usa `limit`)
+  // Limiter
   app.use(rateLimit({ windowMs: 60_000, limit: 120 }));
 
-  // Healthcheck + raiz
-  app.get('/', (_req, res) =>
-    res.json({ ok: true, service: 'api', ts: new Date().toISOString() })
-  );
+  // Health
+  app.get('/', (_req, res) => res.json({ ok: true, service: 'api', ts: new Date().toISOString() }));
   app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
-  // Header para o endpoint de QR (libera embed cross-origin)
+  // Header p/ QR (embed cross-origin)
   app.use('/v1/reservations/:id/qrcode', (_req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     next();
   });
 
-  // Rotas públicas específicas (antes das privadas p/ não conflitar)
+  // Rotas públicas
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
   app.use('/v1/units/public', unitsPublicRouter);
 
-  // ✅ Rotas de CONVIDADOS (disponíveis em /v1/reservations e também como alias em /v1/reservations/public)
-  //    Exemplos:
-  //      POST /v1/reservations/:id/guests
-  //      POST /v1/reservations/:id/guests/bulk
   // Auth
   app.use('/auth', authRoutes);
 
   // Rotas privadas/admin
   app.use('/v1/reservations', reservationsRouter);
-  app.use('/v1/reservations', reservationsGuestsRouter);
+  app.use('/v1/reservations', reservationsGuestsRouter); // convidados
   app.use('/v1/areas', areasRouter);
   app.use('/v1/areas', areasUploadRouter); // upload de foto de área
   app.use('/v1/units', unitsRouter);
@@ -156,8 +153,7 @@ export function buildServer() {
   const openapiPath = path.resolve(__dirname, '..', '..', '..', 'openapi.json');
   let openapiDoc: any = { openapi: '3.0.3', info: { title: 'Mané API', version: '1.0.0' } };
   try {
-    const raw = fs.readFileSync(openapiPath, 'utf-8');
-    openapiDoc = JSON.parse(raw);
+    openapiDoc = JSON.parse(fs.readFileSync(openapiPath, 'utf-8'));
   } catch (e) {
     logger.warn({ e }, 'openapi.json not found, serving minimal doc');
   }
