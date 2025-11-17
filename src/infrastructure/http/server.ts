@@ -139,7 +139,7 @@ export function buildServer() {
   app.use('/v1/units/public', unitsPublicRouter);
 
   // Auth
-  app.use('/auth', authRoutes);
+  app.use('/v1/auth', authRoutes);
 
   // Rotas privadas/admin
   app.use('/v1/reservations', reservationsRouter);
