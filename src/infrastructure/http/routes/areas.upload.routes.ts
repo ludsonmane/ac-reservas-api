@@ -7,7 +7,7 @@ import { requireAuth, requireRole } from '../middlewares/requireAuth';
 
 // S3
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import mime from 'mime-types';
+import * as mime from 'mime-types';
 
 const router = Router();
 
