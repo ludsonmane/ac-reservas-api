@@ -4,6 +4,8 @@ exports.ReservationController = void 0;
 const reservation_dto_1 = require("../dtos/reservation.dto");
 const logger_1 = require("../../../config/logger");
 const sendReservationTicket_1 = require("../../../services/email/sendReservationTicket");
+const zod_1 = require("zod"); // ✅ novo
+const prisma_1 = require("../../../infrastructure/db/prisma"); // ✅ novo
 /* ===== Helpers ===== */
 function toInt(v, fb) {
     const n = Number(v);
@@ -179,6 +181,58 @@ class ReservationController {
     delete = async (req, res) => {
         await this.deleteUC.execute(req.params.id);
         return res.sendStatus(204);
+    };
+    /* ========== NOVO: POST /v1/reservations/:id/guests/bulk ========== */
+    addGuestsBulk = async (req, res) => {
+        const reservationId = String(req.params.id || '').trim();
+        if (!reservationId)
+            return res.status(400).json({ error: 'Missing reservation id' });
+        // validação de entrada com zod
+        const Email = zod_1.z.string().trim().toLowerCase().email();
+        const GuestSchema = zod_1.z.object({
+            name: zod_1.z.string().trim().min(2, 'name too short').max(200),
+            email: Email,
+            role: zod_1.z.enum(['GUEST', 'HOST']).optional().default('GUEST'),
+        });
+        const BodySchema = zod_1.z.object({
+            guests: zod_1.z.array(GuestSchema).min(1).max(1000),
+        });
+        const parsed = BodySchema.safeParse(req.body);
+        if (!parsed.success) {
+            return res.status(400).json({ error: parsed.error.flatten() });
+        }
+        try {
+            // garante que a reserva existe
+            const exists = await prisma_1.prisma.reservation.findUnique({
+                where: { id: reservationId },
+                select: { id: true },
+            });
+            if (!exists)
+                return res.status(404).json({ error: 'RESERVATION_NOT_FOUND' });
+            // normaliza payload
+            const data = parsed.data.guests.map((g) => ({
+                reservationId,
+                name: g.name.trim(),
+                email: g.email.trim().toLowerCase(),
+                role: g.role, // 'GUEST' | 'HOST'
+            }));
+            // inserção em massa com proteção de duplicados por (reservationId, email)
+            const result = await prisma_1.prisma.guest.createMany({
+                data,
+                skipDuplicates: true,
+            });
+            const created = result.count;
+            const skipped = data.length - created;
+            return res.status(200).json({ created, skipped });
+        }
+        catch (err) {
+            // trata erro de índice único ou outros
+            if (err?.code === 'P2003') {
+                return res.status(400).json({ error: 'FOREIGN_KEY_CONSTRAINT' });
+            }
+            logger_1.logger.error({ err }, '[reservations.guests.bulk] unhandled error');
+            return res.status(500).json({ error: 'INTERNAL_ERROR' });
+        }
     };
 }
 exports.ReservationController = ReservationController;

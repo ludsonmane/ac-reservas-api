@@ -7,10 +7,13 @@ exports.reservationsPublicRouter = void 0;
 // src/infrastructure/http/routes/reservations.public.routes.ts
 const express_1 = require("express");
 const dayjs_1 = __importDefault(require("dayjs"));
+const zod_1 = require("zod");
+const utc_1 = __importDefault(require("dayjs/plugin/utc"));
 const client_1 = require("../../db/client");
 const areas_service_1 = require("../../../modules/areas/areas.service");
 const router = (0, express_1.Router)();
 exports.reservationsPublicRouter = router;
+dayjs_1.default.extend(utc_1.default);
 /* =============================================================================
    Helpers
 ============================================================================= */
@@ -33,10 +36,8 @@ function getPeriodFromDate(dt) {
 }
 function periodWindow(dt) {
     if (getPeriodFromDate(dt) === 'NIGHT') {
-        // noite: 17:30 → 23:59:59.999
         return { from: at(dt, 17, 30), to: endOfDay(dt) };
     }
-    // tarde: 12:00 → 17:29:59.999
     return { from: at(dt, 12, 0), to: at(dt, 17, 29, 59, 999) };
 }
 function genCode6() {
@@ -69,13 +70,9 @@ function cryptoRandom() {
     const crypto = require('crypto');
     return crypto.randomBytes(16).toString('hex');
 }
+const toLowerEmail = (v) => (v ?? '').trim().toLowerCase() || null;
 /* =============================================================================
    GET /v1/reservations/public/availability
-   -> Áreas com disponibilidade por unidade/data (e opcionalmente horário)
-   Query:
-   - unitId: string (obrigatório)
-   - date:   YYYY-MM-DD (opcional)
-   - time:   HH:mm      (opcional — se vier, calcula por período)
 ============================================================================= */
 router.get('/availability', async (req, res, next) => {
     try {
@@ -93,22 +90,62 @@ router.get('/availability', async (req, res, next) => {
     }
 });
 /* =============================================================================
-   POST /v1/reservations/public
-   Criação pública de reserva com validação de capacidade por PERÍODO
+   GET /v1/reservations/public/by-id/:id
+   -> usado pelo front para montar o boarding pass direto
 ============================================================================= */
-/**
- * Body:
- * {
- *   fullName, cpf?, people, kids?, reservationDate (ISO), birthdayDate?,
- *   email?, phone?, notes?,
- *   unitId, areaId,
- *   utm_*..., url?, ref?, source?
- * }
- */
+router.get('/by-id/:id', async (req, res) => {
+    const { id } = req.params;
+    const r = await client_1.prisma.reservation.findUnique({
+        where: { id },
+    });
+    if (!r)
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
+    return res.json(r);
+});
+/* =============================================================================
+   GET /v1/reservations/public/active
+   -> traz a reserva "em aberto" (AWAITING_CHECKIN / CONFIRMED / PENDING)
+      por id OU por email/phone
+============================================================================= */
+router.get('/active', async (req, res) => {
+    const id = req.query.id?.trim();
+    const email = toLowerEmail(req.query.email);
+    const phone = req.query.phone?.replace(/\D+/g, '');
+    // por id direto
+    if (id) {
+        const r = await client_1.prisma.reservation.findUnique({ where: { id } });
+        // só conta se estiver aguardando check-in
+        if (!r || r.status !== 'AWAITING_CHECKIN') {
+            return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Nenhuma reserva ativa.' } });
+        }
+        return res.json(r);
+    }
+    if (!email && !phone) {
+        return res.status(400).json({ error: { code: 'VALIDATION', message: 'Informe id ou email/phone.' } });
+    }
+    const where = {
+        status: 'AWAITING_CHECKIN',
+    };
+    if (email)
+        where.email = email;
+    if (phone)
+        where.phone = phone;
+    const r = await client_1.prisma.reservation.findFirst({
+        where,
+        orderBy: { createdAt: 'desc' },
+    });
+    if (!r) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Nenhuma reserva ativa.' } });
+    }
+    return res.json(r);
+});
+/* =============================================================================
+   POST /v1/reservations/public
+============================================================================= */
 router.post('/', async (req, res) => {
     try {
         const { fullName, cpf, people, kids = 0, reservationDate, birthdayDate, email, phone, notes, unitId, areaId, utm_source, utm_medium, utm_campaign, utm_content, utm_term, url, ref, source, } = req.body || {};
-        // validações
+        // validações básicas
         if (!fullName || String(fullName).trim().length < 3) {
             return res.status(400).json({ error: { code: 'VALIDATION', message: 'Informe o nome completo.' } });
         }
@@ -126,6 +163,34 @@ router.post('/', async (req, res) => {
         if (!reservationDate || !(0, dayjs_1.default)(reservationDate).isValid()) {
             return res.status(400).json({ error: { code: 'VALIDATION', message: 'reservationDate inválido.' } });
         }
+        const emailNorm = toLowerEmail(email);
+        const phoneNorm = phone ? String(phone).replace(/\D+/g, '') : null;
+        // 🔐 anti-duplicidade: se já tem reserva ativa para esse contato, bloqueia
+        if (emailNorm || phoneNorm) {
+            const existing = await client_1.prisma.reservation.findFirst({
+                where: {
+                    status: 'AWAITING_CHECKIN',
+                    OR: [
+                        emailNorm ? { email: emailNorm } : undefined,
+                        phoneNorm ? { phone: phoneNorm } : undefined,
+                    ].filter(Boolean),
+                },
+                orderBy: { createdAt: 'desc' },
+            });
+            if (existing) {
+                return res.status(409).json({
+                    error: {
+                        code: 'ALREADY_HAS_ACTIVE_RESERVATION',
+                        message: 'Você já tem uma reserva ativa. Faça o check-in para poder reservar de novo.',
+                        reservationId: existing.id,
+                        reservationCode: existing.reservationCode,
+                        reservationDate: existing.reservationDate,
+                        unitId: existing.unitId,
+                        areaId: existing.areaId,
+                    },
+                });
+            }
+        }
         // checa unidade/área
         const [unit, area] = await Promise.all([
             client_1.prisma.unit.findUnique({
@@ -137,7 +202,6 @@ router.post('/', async (req, res) => {
                 select: {
                     id: true,
                     name: true,
-                    // capacity removido do schema — não selecionar!
                     capacityAfternoon: true,
                     capacityNight: true,
                     isActive: true,
@@ -157,11 +221,9 @@ router.post('/', async (req, res) => {
         const dt = new Date(reservationDate);
         const { from, to } = periodWindow(dt);
         const period = getPeriodFromDate(dt); // 'AFTERNOON' | 'NIGHT'
-        // capacidade do período (sem fallback para diário, já removido)
         const maxPeriod = period === 'AFTERNOON'
             ? (area.capacityAfternoon ?? 0)
             : (area.capacityNight ?? 0);
-        // soma só reservas que consomem capacidade
         const grouped = await client_1.prisma.reservation.groupBy({
             by: ['areaId'],
             where: {
@@ -172,7 +234,6 @@ router.post('/', async (req, res) => {
             _sum: { people: true, kids: true },
         });
         const alreadyUsed = (grouped[0]?._sum.people ?? 0) + (grouped[0]?._sum.kids ?? 0);
-        // requisitado (conta UMA vez só)
         const willUse = Math.max(0, Math.floor(peopleNum)) + Math.max(0, Math.floor(kidsNum));
         const remaining = Math.max(0, maxPeriod - alreadyUsed);
         if (willUse > remaining) {
@@ -199,13 +260,13 @@ router.post('/', async (req, res) => {
                 kids: Math.max(0, Math.floor(kidsNum)),
                 reservationDate: dt,
                 birthdayDate: birthdayDate ? new Date(birthdayDate) : null,
-                phone: phone ? String(phone) : null,
-                email: email ? String(email) : null,
+                phone: phoneNorm,
+                email: emailNorm,
                 notes: notes ? String(notes) : null,
                 unitId: unit.id,
-                unit: unit.name, // denormalização para compat
+                unit: unit.name,
                 areaId: area.id,
-                areaName: area.name, // denormalização para compat
+                areaName: area.name,
                 utm_source: utm_source ?? null,
                 utm_medium: utm_medium ?? null,
                 utm_campaign: utm_campaign ?? null,
@@ -219,7 +280,7 @@ router.post('/', async (req, res) => {
                 qrExpiresAt,
                 status: 'AWAITING_CHECKIN',
             },
-            select: { id: true, reservationCode: true },
+            select: { id: true, reservationCode: true, status: true },
         });
         return res.status(201).json(created);
     }
@@ -227,5 +288,112 @@ router.post('/', async (req, res) => {
         console.error('[reservations.public] error:', e);
         return res.status(500).json({ error: { code: 'INTERNAL', message: 'Falha ao criar reserva.' } });
     }
+});
+/* =============================================================================
+   NOVO: POST /v1/reservations/public/:id/guests/bulk
+   - Insere convidados (GUEST/HOST) em massa para a reserva informada
+   - Requer schema Guest no Prisma com @@unique([reservationId, email])
+============================================================================= */
+router.post('/:id/guests/bulk', async (req, res) => {
+    const reservationId = String(req.params.id || '').trim();
+    if (!reservationId)
+        return res.status(400).json({ error: { code: 'VALIDATION', message: 'Missing reservation id' } });
+    const Email = zod_1.z.string().trim().toLowerCase().email();
+    const GuestSchema = zod_1.z.object({
+        name: zod_1.z.string().trim().min(2, 'name too short').max(200),
+        email: Email,
+        role: zod_1.z.enum(['GUEST', 'HOST']).optional().default('GUEST'),
+    });
+    const BodySchema = zod_1.z.object({
+        guests: zod_1.z.array(GuestSchema).min(1).max(1000),
+    });
+    const parsed = BodySchema.safeParse(req.body);
+    if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.flatten() });
+    }
+    // garante que a reserva existe
+    const exists = await client_1.prisma.reservation.findUnique({
+        where: { id: reservationId },
+        select: { id: true },
+    });
+    if (!exists)
+        return res.status(404).json({ error: { code: 'RESERVATION_NOT_FOUND' } });
+    const data = parsed.data.guests.map((g) => ({
+        reservationId,
+        name: g.name.trim(),
+        email: g.email.trim().toLowerCase(),
+        role: g.role, // 'GUEST' | 'HOST'
+    }));
+    try {
+        const result = await client_1.prisma.guest.createMany({
+            data,
+            skipDuplicates: true,
+        });
+        const created = result.count;
+        const skipped = data.length - created;
+        return res.status(200).json({ created, skipped });
+    }
+    catch (err) {
+        if (err?.code === 'P2003') {
+            return res.status(400).json({ error: { code: 'FOREIGN_KEY_CONSTRAINT' } });
+        }
+        console.error('[reservations.public.guests.bulk] error:', err);
+        return res.status(500).json({ error: { code: 'INTERNAL' } });
+    }
+});
+/* =============================================================================
+   NOVO: GET /v1/reservations/public/:id/meet-link
+   - Retorna uma URL do Google Calendar (action=TEMPLATE) com título, horário e e-mails
+   - O Meet é criado pelo Google ao salvar o evento
+============================================================================= */
+router.get('/:id/meet-link', async (req, res) => {
+    const reservationId = String(req.params.id || '').trim();
+    if (!reservationId)
+        return res.status(400).json({ error: { code: 'VALIDATION', message: 'Missing reservation id' } });
+    const r = await client_1.prisma.reservation.findUnique({
+        where: { id: reservationId },
+        select: {
+            id: true,
+            fullName: true,
+            email: true,
+            reservationDate: true,
+            unit: true,
+            unitId: true,
+            areaName: true,
+        },
+    });
+    if (!r)
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
+    // pega e-mails dos convidados + titular (se tiver email)
+    const guests = await client_1.prisma.guest.findMany({
+        where: { reservationId },
+        select: { email: true },
+    });
+    const emails = [
+        toLowerEmail(r.email),
+        ...guests.map((g) => toLowerEmail(g.email)).filter(Boolean),
+    ].filter(Boolean);
+    // monta URL do Google Calendar
+    const start = (0, dayjs_1.default)(r.reservationDate);
+    const end = start.add(2, 'hour'); // duração padrão 2h
+    const fmt = (d) => d.utc().format('YYYYMMDD[T]HHmmss[Z]'); // formato aceito pelo Calendar
+    const text = `RESERVA DO ${r.fullName?.toUpperCase?.() || 'CLIENTE'} NO MANÉ MERCADO`;
+    const details = [
+        r.unit ? `Unidade: ${r.unit}` : null,
+        r.areaName ? `Área: ${r.areaName}` : null,
+        `Gerado automaticamente pelo site.`,
+    ]
+        .filter(Boolean)
+        .join('\\n');
+    const base = 'https://calendar.google.com/calendar/render?action=TEMPLATE';
+    const params = new URLSearchParams();
+    params.set('text', text);
+    params.set('dates', `${fmt(start)}/${fmt(end)}`);
+    if (emails.length)
+        params.set('add', emails.join(','));
+    params.set('details', details);
+    params.set('location', 'Google Meet (gerado ao salvar)');
+    const url = `${base}&${params.toString()}`;
+    return res.json({ url });
 });
 exports.default = router;

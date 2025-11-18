@@ -79,7 +79,7 @@ class PrismaReservationRepository {
                     : 0,
             people: typeof data?.people === 'number'
                 ? Math.max(1, Math.trunc(data.people))
-                : Math.max(1, Number.isFinite(Number(data?.people)) ? Math.trunc(Number(data.people)) : 1),
+                : Math.max(1, Number.isFinite(Number(data?.people)) ? Math.trunc(Number(data?.people)) : 1),
             // datas
             reservationDate: data?.reservationDate instanceof Date
                 ? data.reservationDate
@@ -302,6 +302,43 @@ class PrismaReservationRepository {
     }
     async delete(id) {
         await prisma_1.prisma.reservation.delete({ where: { id } });
+    }
+    // ✅ NOVO: inserir convidados em massa (usa prisma.guest)
+    async addGuestsBulk(reservationId, guests) {
+        // Verifica se a reserva existe
+        const exists = await prisma_1.prisma.reservation.findUnique({
+            where: { id: reservationId },
+            select: { id: true }
+        });
+        if (!exists) {
+            throw new Error('RESERVATION_NOT_FOUND');
+        }
+        // Normaliza / filtra e deduplica por e-mail no payload
+        const seen = new Set();
+        const normalized = guests
+            .map((g) => {
+            const name = (g.name ?? '').trim();
+            const email = (g.email ?? '').trim().toLowerCase();
+            const role = (g.role ?? 'GUEST');
+            return { reservationId, name, email, role };
+        })
+            .filter((g) => g.name.length >= 2 && g.email.length >= 5)
+            .filter((g) => {
+            if (seen.has(g.email))
+                return false;
+            seen.add(g.email);
+            return true;
+        });
+        if (normalized.length === 0) {
+            return { created: 0, skipped: guests.length };
+        }
+        const result = await prisma_1.prisma.guest.createMany({
+            data: normalized,
+            skipDuplicates: true, // exige UNIQUE(reservationId, email)
+        });
+        const created = result.count;
+        const skipped = guests.length - created;
+        return { created, skipped };
     }
 }
 exports.PrismaReservationRepository = PrismaReservationRepository;

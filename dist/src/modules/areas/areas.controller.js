@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createArea = createArea;
 exports.updateArea = updateArea;
+// src/api/controllers/AreaController.ts
 const client_1 = require("../../infrastructure/db/client");
 function toIntOrNull(v) {
     if (v === '' || v === null || typeof v === 'undefined')
@@ -11,6 +12,19 @@ function toIntOrNull(v) {
         return null;
     return Math.max(0, Math.floor(n));
 }
+function strOrNull(v) {
+    if (v === null || typeof v === 'undefined')
+        return null;
+    const s = String(v).trim();
+    return s.length ? s : null;
+}
+function sanitizeEmoji(v) {
+    const s = strOrNull(v);
+    if (!s)
+        return null;
+    // evita textos gigantes/HTML; emoji costuma ter 1–3 code points
+    return s.slice(0, 8);
+}
 /** POST /v1/areas */
 async function createArea(req, res) {
     try {
@@ -18,15 +32,21 @@ async function createArea(req, res) {
         // aceita camelCase ou snake_case
         const capacityAfternoonRaw = req.body?.capacityAfternoon ?? req.body?.capacity_afternoon;
         const capacityNightRaw = req.body?.capacityNight ?? req.body?.capacity_night;
+        const descriptionRaw = req.body?.description ?? req.body?.desc ?? req.body?.area_description;
+        const iconEmojiRaw = req.body?.iconEmoji ?? req.body?.icon_emoji;
+        const photoUrlRaw = req.body?.photoUrl ?? req.body?.photo_url ?? req.body?.photo;
         const capacityAfternoon = toIntOrNull(capacityAfternoonRaw);
         const capacityNight = toIntOrNull(capacityNightRaw);
+        const description = strOrNull(descriptionRaw);
+        const iconEmoji = sanitizeEmoji(iconEmojiRaw);
+        const photoUrl = strOrNull(photoUrlRaw);
         if (!unitId)
             return res.status(400).json({ message: 'unitId é obrigatório.' });
         if (!name || !String(name).trim())
             return res.status(400).json({ message: 'name é obrigatório.' });
         // DEBUG curto:
         console.debug('[areas.create] body:', {
-            unitId, name, isActive, capacityAfternoonRaw, capacityNightRaw, capacityAfternoon, capacityNight
+            unitId, name, isActive, capacityAfternoon, capacityNight, description, iconEmoji, photoUrl
         });
         const created = await client_1.prisma.area.create({
             data: {
@@ -35,10 +55,16 @@ async function createArea(req, res) {
                 capacityAfternoon,
                 capacityNight,
                 isActive: typeof isActive === 'boolean' ? isActive : true,
+                description, // 👈 novo
+                iconEmoji, // 👈 novo
+                photoUrl, // 👈 novo
             },
-        });
-        console.debug('[areas.create] saved:', {
-            id: created.id, capacityAfternoon: created.capacityAfternoon, capacityNight: created.capacityNight
+            select: {
+                id: true, unitId: true, name: true, isActive: true,
+                capacityAfternoon: true, capacityNight: true,
+                description: true, iconEmoji: true, photoUrl: true, // 👈 retornar no payload
+                createdAt: true, updatedAt: true,
+            },
         });
         return res.status(201).json(created);
     }
@@ -56,6 +82,9 @@ async function updateArea(req, res) {
         // aceita camelCase ou snake_case
         const capacityAfternoonRaw = req.body?.capacityAfternoon ?? req.body?.capacity_afternoon;
         const capacityNightRaw = req.body?.capacityNight ?? req.body?.capacity_night;
+        const descriptionRaw = req.body?.description ?? req.body?.desc ?? req.body?.area_description;
+        const iconEmojiRaw = req.body?.iconEmoji ?? req.body?.icon_emoji;
+        const photoUrlRaw = req.body?.photoUrl ?? req.body?.photo_url ?? req.body?.photo;
         // 1) lê o registro atual para defaults reais
         const current = await client_1.prisma.area.findUnique({
             where: { id: String(id) },
@@ -65,49 +94,56 @@ async function updateArea(req, res) {
                 isActive: true,
                 capacityAfternoon: true,
                 capacityNight: true,
+                description: true,
+                iconEmoji: true,
+                photoUrl: true,
             },
         });
         if (!current)
             return res.status(404).json({ message: 'Área não encontrada.' });
         // 2) monta os próximos valores
         const data = {};
-        if (req.body?.unitId)
-            data.unitId = String(req.body.unitId);
-        if (typeof req.body?.name === 'string')
-            data.name = String(req.body.name).trim();
+        if ('unitId' in (req.body ?? {}))
+            data.unitId = strOrNull(req.body.unitId);
+        if ('name' in (req.body ?? {}))
+            data.name = strOrNull(req.body.name);
         if (typeof req.body?.isActive === 'boolean')
             data.isActive = req.body.isActive;
-        // Se veio no body (em qualquer casing), usa; senão mantém o valor atual
-        const nextCapacityAfternoon = (('capacityAfternoon' in (req.body ?? {})) || ('capacity_afternoon' in (req.body ?? {})))
-            ? toIntOrNull(capacityAfternoonRaw)
-            : (current.capacityAfternoon ?? null);
-        const nextCapacityNight = (('capacityNight' in (req.body ?? {})) || ('capacity_night' in (req.body ?? {})))
-            ? toIntOrNull(capacityNightRaw)
-            : (current.capacityNight ?? null);
-        // escreve SEMPRE os dois campos, pra evitar “ficar 0”
-        data.capacityAfternoon = nextCapacityAfternoon;
-        data.capacityNight = nextCapacityNight;
+        // capacity: se veio no body (qualquer casing), usa; senão mantém atual
+        const hasCapAfternoon = ('capacityAfternoon' in (req.body ?? {})) || ('capacity_afternoon' in (req.body ?? {}));
+        const hasCapNight = ('capacityNight' in (req.body ?? {})) || ('capacity_night' in (req.body ?? {}));
+        data.capacityAfternoon = hasCapAfternoon ? toIntOrNull(capacityAfternoonRaw) : (current.capacityAfternoon ?? null);
+        data.capacityNight = hasCapNight ? toIntOrNull(capacityNightRaw) : (current.capacityNight ?? null);
+        // campos novos: se vieram, aplica; se não vieram, mantém atual
+        const hasDescription = ('description' in (req.body ?? {})) || ('desc' in (req.body ?? {})) || ('area_description' in (req.body ?? {}));
+        const hasIconEmoji = ('iconEmoji' in (req.body ?? {})) || ('icon_emoji' in (req.body ?? {}));
+        const hasPhotoUrl = ('photoUrl' in (req.body ?? {})) || ('photo_url' in (req.body ?? {})) || ('photo' in (req.body ?? {}));
+        if (hasDescription)
+            data.description = strOrNull(descriptionRaw);
+        if (hasIconEmoji)
+            data.iconEmoji = sanitizeEmoji(iconEmojiRaw);
+        if (hasPhotoUrl)
+            data.photoUrl = strOrNull(photoUrlRaw);
         // capacity diário descontinuado — se vier por engano, zera
         if ('capacity' in (req.body ?? {})) {
             data.capacity = null;
         }
+        // remove chaves indefinidas (evita set undefined no prisma)
+        Object.keys(data).forEach((k) => {
+            if (typeof data[k] === 'undefined')
+                delete data[k];
+        });
         // DEBUG curto:
-        console.debug('[areas.update] body:', {
-            id,
-            incoming: req.body,
-            parsed: { capacityAfternoonRaw, capacityNightRaw },
-        });
-        console.debug('[areas.update] apply:', {
-            nextCapacityAfternoon,
-            nextCapacityNight,
-            other: { unitId: data.unitId, name: data.name, isActive: data.isActive },
-        });
+        console.debug('[areas.update] apply:', data);
         const updated = await client_1.prisma.area.update({
             where: { id: String(id) },
             data,
-        });
-        console.debug('[areas.update] saved:', {
-            id: updated.id, capacityAfternoon: updated.capacityAfternoon, capacityNight: updated.capacityNight
+            select: {
+                id: true, unitId: true, name: true, isActive: true,
+                capacityAfternoon: true, capacityNight: true,
+                description: true, iconEmoji: true, photoUrl: true, // 👈 retornar no payload
+                createdAt: true, updatedAt: true,
+            },
         });
         return res.json(updated);
     }

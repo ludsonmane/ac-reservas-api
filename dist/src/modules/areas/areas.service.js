@@ -18,14 +18,14 @@ function at(d, hh, mm, ss = 0, ms = 0) {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, ms);
 }
 /** 17:30 → corte do período da NOITE */
-const EVENING_CUTOFF_MIN = 17 * 60 + 30; // 17:30
+const EVENING_CUTOFF_MIN = 17 * 60 + 30;
 /** HH:mm válido (ex.: 09:05, 17:30) */
 function isValidHHmm(input) {
     if (!input)
         return false;
     return /^\d{2}:\d{2}$/.test(input);
 }
-/** Força janelas do negócio (tarde/noite). < 12:00 cai em AFTERNOON. */
+/** Janela de negócio */
 function clampToBusinessWindow(hhmm) {
     const [hh, mm] = hhmm.split(':').map(Number);
     const mins = (hh || 0) * 60 + (mm || 0);
@@ -33,11 +33,9 @@ function clampToBusinessWindow(hhmm) {
         return 'AFTERNOON';
     return mins >= EVENING_CUTOFF_MIN ? 'NIGHT' : 'AFTERNOON';
 }
-/** Determina período a partir de HH:mm (com clamp para janela de negócio) */
 function getPeriodFromHM(hhmm) {
     return clampToBusinessWindow(hhmm);
 }
-/** Janela [from,to] do período na data base */
 function periodWindow(dt, hhmm) {
     const period = getPeriodFromHM(hhmm);
     if (period === 'NIGHT') {
@@ -45,42 +43,69 @@ function periodWindow(dt, hhmm) {
     }
     return { from: at(dt, 12, 0), to: at(dt, 17, 29, 59, 999), period };
 }
+/* ---------------- Foto: normalização ---------------- */
+function normalizePhotoUrl(raw) {
+    if (!raw)
+        return null;
+    const v = String(raw).trim();
+    if (!v)
+        return null;
+    // absoluta (http/https) ou data URI
+    if (/^(https?:)?\/\//i.test(v) || v.startsWith('data:'))
+        return v;
+    // prefixo configurável (API)
+    const base = process.env.PUBLIC_IMAGES_BASE ||
+        process.env.CDN_BASE_URL ||
+        '';
+    if (!base) {
+        // devolve relativo mesmo
+        return v.startsWith('/') ? v : `/${v}`;
+    }
+    const b = base.replace(/\/+$/, '');
+    const p = v.replace(/^\/+/, '');
+    return `${b}/${p}`;
+}
 exports.areasService = {
     /**
      * Lista áreas ativas de uma unidade.
      * - Se `dateISO` vier, soma (people + kids).
-     * - Se TAMBÉM vier `timeHHmm`, usa janela do PERÍODO (tarde/noite) e
-     *   aplica a capacidade específica do período (capacityAfternoon / capacityNight).
-     * - Sem `timeHHmm` → capacidade DIÁRIA = (capacityAfternoon ?? 0) + (capacityNight ?? 0).
+     * - Se vier também `timeHHmm`, usa janela do PERÍODO (tarde/noite) e
+     *   aplica a capacidade específica (capacityAfternoon / capacityNight).
+     * - Sem `timeHHmm` → capacidade diária = (capacityAfternoon ?? 0) + (capacityNight ?? 0).
      */
     async listByUnitPublic(unitId, dateISO, timeHHmm) {
         if (!unitId)
             return [];
-        // carrega áreas ativas com os campos necessários (sem 'capacity')
+        // ⚠️ somente campos existentes no modelo
         const areas = await client_1.prisma.area.findMany({
             where: { unitId, isActive: true },
             select: {
                 id: true,
                 name: true,
-                photoUrl: true,
+                photoUrl: true, // existe
                 capacityAfternoon: true,
-                capacityNight: true, // nome correto
+                capacityNight: true,
                 isActive: true,
+                description: true, // existe
+                iconEmoji: true, // existe
             },
             orderBy: { name: 'asc' },
         });
-        // Sem data → devolve apenas dados “estáticos”
+        // normaliza a foto
+        const withResolvedPhoto = areas.map((a) => ({
+            ...a,
+            photoUrl: normalizePhotoUrl(a.photoUrl),
+        }));
+        // Sem data → “estático”
         if (!dateISO) {
-            return areas;
+            return withResolvedPhoto;
         }
         const parsed = (0, dayjs_1.default)(dateISO, 'YYYY-MM-DD', true);
         const base = parsed.isValid() ? parsed.toDate() : new Date();
-        // Se veio horário, calculamos por PERÍODO; caso contrário, por DIA inteiro
+        // Período (timeHHmm)
         if (timeHHmm) {
-            // Blindagem: se HH:mm inválido, normaliza para 12:00 (início da tarde)
             const safeTime = isValidHHmm(timeHHmm) ? timeHHmm : '12:00';
             const { from, to, period } = periodWindow(base, safeTime);
-            // soma (people+kids) por área no período
             const grouped = await client_1.prisma.reservation.groupBy({
                 by: ['areaId'],
                 where: {
@@ -96,7 +121,7 @@ exports.areasService = {
                 if (g.areaId)
                     usedMap.set(g.areaId, used);
             }
-            return areas.map((a) => {
+            return withResolvedPhoto.map((a) => {
                 const periodCap = period === 'AFTERNOON'
                     ? (a.capacityAfternoon ?? 0)
                     : (a.capacityNight ?? 0);
@@ -110,7 +135,7 @@ exports.areasService = {
                 };
             });
         }
-        // Sem timeHHmm → considerar o DIA inteiro
+        // Dia inteiro
         const from = startOfDay(base);
         const to = endOfDay(base);
         const grouped = await client_1.prisma.reservation.groupBy({
@@ -128,8 +153,7 @@ exports.areasService = {
             if (g.areaId)
                 usedMap.set(g.areaId, used);
         }
-        return areas.map((a) => {
-            // capacidade "diária" = soma das capacidades dos dois períodos
+        return withResolvedPhoto.map((a) => {
             const dayCap = (a.capacityAfternoon ?? 0) + (a.capacityNight ?? 0);
             const used = usedMap.get(a.id) ?? 0;
             const available = Math.max(0, dayCap - used);

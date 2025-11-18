@@ -6,7 +6,7 @@ const express_1 = require("express");
 const prisma_1 = require("../../db/prisma");
 const requireAuth_1 = require("../middlewares/requireAuth");
 exports.areasRouter = (0, express_1.Router)();
-/* Utils */
+/* ---------- Utils ---------- */
 function toIntOrNull(v) {
     if (v === '' || v === null || typeof v === 'undefined')
         return null;
@@ -15,11 +15,30 @@ function toIntOrNull(v) {
         return null;
     return Math.max(0, Math.floor(n));
 }
-/**
- * GET /v1/areas
+function strOrNull(v, max) {
+    if (typeof v !== 'string')
+        return null;
+    const s = v.trim();
+    if (!s)
+        return null;
+    return typeof max === 'number' ? s.slice(0, max) : s;
+}
+function boolOrUndefined(v) {
+    if (typeof v === 'boolean')
+        return v;
+    if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (s === 'true')
+            return true;
+        if (s === 'false')
+            return false;
+    }
+    return undefined;
+}
+/* ============================================================
+ * GET /v1/areas (ADMIN) — lista paginada com filtros
  * Filtros: page, pageSize, unitId, search, active
- * 🔒 Auth: ADMIN
- */
+ * ============================================================ */
 exports.areasRouter.get('/', requireAuth_1.requireAuth, (0, requireAuth_1.requireRole)(['ADMIN']), async (req, res) => {
     const { page = '1', pageSize = '20', unitId, search, active } = req.query;
     const take = Math.max(1, Math.min(200, Number(pageSize)));
@@ -27,8 +46,11 @@ exports.areasRouter.get('/', requireAuth_1.requireAuth, (0, requireAuth_1.requir
     const where = {};
     if (unitId)
         where.unitId = String(unitId);
-    if (typeof active !== 'undefined' && active !== '')
-        where.isActive = String(active) === 'true';
+    if (typeof active !== 'undefined' && active !== '') {
+        const parsed = boolOrUndefined(active);
+        if (typeof parsed === 'boolean')
+            where.isActive = parsed;
+    }
     if (search?.trim()) {
         const q = search.trim();
         where.OR = [
@@ -45,6 +67,7 @@ exports.areasRouter.get('/', requireAuth_1.requireAuth, (0, requireAuth_1.requir
             include: {
                 unit: { select: { id: true, name: true, slug: true } },
             },
+            // Nota: sem select → Prisma retorna todos os campos, incluindo iconEmoji/description
         }),
         prisma_1.prisma.area.count({ where }),
     ]);
@@ -56,16 +79,21 @@ exports.areasRouter.get('/', requireAuth_1.requireAuth, (0, requireAuth_1.requir
         totalPages: Math.ceil(total / take),
     });
 });
-/**
- * POST /v1/areas
- * body: { unitId: string, name: string, capacityAfternoon?: number|null, capacityNight?: number|null, isActive?: boolean, photoUrl?: string|null }
- * 🔒 Auth: ADMIN
- */
+/* ============================================================
+ * POST /v1/areas (ADMIN) — cria área
+ * body: { unitId, name, capacityAfternoon?, capacityNight?, isActive?, photoUrl?, iconEmoji?, description? }
+ * ============================================================ */
 exports.areasRouter.post('/', requireAuth_1.requireAuth, (0, requireAuth_1.requireRole)(['ADMIN']), async (req, res) => {
-    const { unitId, name, isActive = true, photoUrl } = req.body || {};
-    // aceita camelCase e snake_case
+    const { unitId, name } = req.body || {};
+    // capacidades (aceita camelCase e snake_case)
     const capAfternoonRaw = req.body?.capacityAfternoon ?? req.body?.capacity_afternoon;
     const capNightRaw = req.body?.capacityNight ?? req.body?.capacity_night;
+    // novos campos (camel/snake)
+    const iconEmojiRaw = req.body?.iconEmoji ?? req.body?.icon_emoji;
+    const descriptionRaw = req.body?.description;
+    // outros
+    const isActiveRaw = req.body?.isActive;
+    const photoUrlRaw = req.body?.photoUrl;
     if (!unitId)
         return res.status(400).json({ error: 'unitId é obrigatório' });
     if (!name?.trim())
@@ -76,14 +104,22 @@ exports.areasRouter.post('/', requireAuth_1.requireAuth, (0, requireAuth_1.requi
     const data = {
         unitId: String(unitId),
         name: String(name).trim(),
-        isActive: Boolean(isActive),
     };
-    if (typeof photoUrl === 'string')
-        data.photoUrl = photoUrl.trim();
+    const isActive = boolOrUndefined(isActiveRaw);
+    data.isActive = typeof isActive === 'boolean' ? isActive : true;
+    const photoUrl = strOrNull(typeof photoUrlRaw === 'string' ? photoUrlRaw : undefined);
+    if (photoUrl !== null && typeof photoUrl !== 'undefined')
+        data.photoUrl = photoUrl;
     if (capAfternoonRaw !== undefined)
         data.capacityAfternoon = toIntOrNull(capAfternoonRaw);
     if (capNightRaw !== undefined)
         data.capacityNight = toIntOrNull(capNightRaw);
+    const iconEmoji = strOrNull(iconEmojiRaw, 16); // mantém curto por segurança
+    const description = strOrNull(descriptionRaw);
+    if (typeof iconEmojiRaw !== 'undefined')
+        data.iconEmoji = iconEmoji; // aceita null para limpar
+    if (typeof descriptionRaw !== 'undefined')
+        data.description = description; // idem
     try {
         const created = await prisma_1.prisma.area.create({ data });
         res.status(201).json(created);
@@ -95,10 +131,9 @@ exports.areasRouter.post('/', requireAuth_1.requireAuth, (0, requireAuth_1.requi
         res.status(400).json({ error: 'Erro ao criar área', details: e?.message });
     }
 });
-/**
- * GET /v1/areas/:id
- * 🔒 Auth: ADMIN
- */
+/* ============================================================
+ * GET /v1/areas/:id (ADMIN)
+ * ============================================================ */
 exports.areasRouter.get('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.requireRole)(['ADMIN']), async (req, res) => {
     const a = await prisma_1.prisma.area.findUnique({
         where: { id: String(req.params.id) },
@@ -108,16 +143,21 @@ exports.areasRouter.get('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.req
         return res.status(404).json({ error: 'Área não encontrada' });
     res.json(a);
 });
-/**
- * PUT /v1/areas/:id
- * body: { unitId?, name?, capacityAfternoon?, capacityNight?, isActive?, photoUrl? }
- * 🔒 Auth: ADMIN
- */
-exports.areasRouter.put('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.requireRole)(['ADMIN']), async (req, res) => {
-    const { unitId, name, isActive, photoUrl } = req.body || {};
-    // aceita camelCase e snake_case para capacidades
+/* ============================================================
+ * PUT /v1/areas/:id (ADMIN) — atualiza (total/parcial)
+ * body: { unitId?, name?, capacityAfternoon?, capacityNight?, isActive?, photoUrl?, iconEmoji?, description? }
+ * ============================================================ */
+async function updateArea(req, res) {
+    const { unitId, name } = req.body || {};
+    // capacidades (camel/snake)
     const capAfternoonRaw = req.body?.capacityAfternoon ?? req.body?.capacity_afternoon;
     const capNightRaw = req.body?.capacityNight ?? req.body?.capacity_night;
+    // novos (camel/snake)
+    const iconEmojiRaw = req.body?.iconEmoji ?? req.body?.icon_emoji;
+    const descriptionRaw = req.body?.description;
+    // outros
+    const isActiveRaw = req.body?.isActive;
+    const photoUrlRaw = req.body?.photoUrl;
     const data = {};
     if (typeof unitId !== 'undefined' && unitId !== null && unitId !== '') {
         const unit = await prisma_1.prisma.unit.findUnique({ where: { id: String(unitId) } });
@@ -130,16 +170,26 @@ exports.areasRouter.put('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.req
             return res.status(400).json({ error: 'name é obrigatório' });
         data.name = String(name).trim();
     }
+    const isActive = boolOrUndefined(isActiveRaw);
     if (typeof isActive === 'boolean') {
         data.isActive = isActive;
     }
-    if (typeof photoUrl === 'string') {
-        data.photoUrl = photoUrl.trim();
+    if (typeof photoUrlRaw !== 'undefined') {
+        const v = strOrNull(photoUrlRaw);
+        data.photoUrl = v;
     }
     if (capAfternoonRaw !== undefined)
         data.capacityAfternoon = toIntOrNull(capAfternoonRaw);
     if (capNightRaw !== undefined)
         data.capacityNight = toIntOrNull(capNightRaw);
+    if (typeof iconEmojiRaw !== 'undefined') {
+        const v = strOrNull(iconEmojiRaw, 16);
+        data.iconEmoji = v; // null se vazio
+    }
+    if (typeof descriptionRaw !== 'undefined') {
+        const v = strOrNull(descriptionRaw);
+        data.description = v; // null se vazio
+    }
     try {
         const updated = await prisma_1.prisma.area.update({
             where: { id: String(req.params.id) },
@@ -154,12 +204,14 @@ exports.areasRouter.put('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.req
             return res.status(409).json({ error: 'Já existe uma área com esse nome nesta unidade' });
         res.status(400).json({ error: 'Erro ao atualizar área', details: e?.message });
     }
-});
-/**
- * DELETE /v1/areas/:id
+}
+exports.areasRouter.put('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.requireRole)(['ADMIN']), updateArea);
+// opcional: aceitar PATCH também
+exports.areasRouter.patch('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.requireRole)(['ADMIN']), updateArea);
+/* ============================================================
+ * DELETE /v1/areas/:id (ADMIN)
  * Regra: 409 se existir reserva vinculada
- * 🔒 Auth: ADMIN
- */
+ * ============================================================ */
 exports.areasRouter.delete('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.requireRole)(['ADMIN']), async (req, res) => {
     const id = String(req.params.id);
     const rCount = await prisma_1.prisma.reservation.count({ where: { areaId: id } });
@@ -176,10 +228,10 @@ exports.areasRouter.delete('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.
         res.status(400).json({ error: 'Erro ao excluir área', details: e?.message });
     }
 });
-/**
- * Público — áreas ativas por unidade (para selects do front)
+/* ============================================================
+ * Público — áreas ativas por unidade
  * GET /v1/areas/public/by-unit/:unitId
- */
+ * ============================================================ */
 exports.areasRouter.get('/public/by-unit/:unitId', async (req, res) => {
     const items = await prisma_1.prisma.area.findMany({
         where: { unitId: String(req.params.unitId), isActive: true },
@@ -190,6 +242,8 @@ exports.areasRouter.get('/public/by-unit/:unitId', async (req, res) => {
             capacityAfternoon: true,
             capacityNight: true,
             isActive: true,
+            iconEmoji: true, // ✅ novos campos
+            description: true, // ✅
         },
         orderBy: { name: 'asc' },
     });
