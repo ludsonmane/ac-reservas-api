@@ -1,40 +1,52 @@
 # -------- Base --------
 FROM node:20-alpine AS base
 WORKDIR /app
-# prisma precisa de openssl; bash para rodar; nc para esperar DB
+# deps básicas usadas em todas as stages
+# (openssl: prisma; bash: entry.sh; netcat: wait DB)
 RUN apk add --no-cache openssl bash netcat-openbsd
 
-# -------- Deps (com dev) para compilar --------
+# -------- Deps (instala node_modules sem rodar scripts) --------
 FROM base AS deps
 COPY package*.json ./
-# evita postinstall (prisma generate) sem schema
+# evita postinstall (ex.: prisma generate) nesta fase
 RUN npm ci --no-audit --no-fund --ignore-scripts
 
-# -------- Builder --------
+# -------- Builder (compila nativos + build TS) --------
 FROM deps AS builder
+WORKDIR /app
 COPY . .
+
+# toolchain para addons nativos (argon2) e rebuild do módulo
+RUN apk add --no-cache python3 make g++ \
+ && npm rebuild argon2 --build-from-source
+
 # gera Prisma Client (schema já presente aqui)
 RUN npx prisma generate
+
 # compila TypeScript -> dist
 RUN npm run build
+
+# remove devDependencies para reduzir tamanho do node_modules que será copiado
+RUN npm prune --omit=dev
 
 # -------- Runner (prod) --------
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# instala só deps de prod (sem postinstall)
-COPY package*.json ./
-RUN npm ci --omit=dev --no-audit --no-fund --ignore-scripts
+# runtime precisa da libstdc++ para módulos nativos
+RUN apk add --no-cache libstdc++
 
-# artefatos do build
+# copie artefatos de build e node_modules já com argon2 compilado
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package*.json ./
 
-# pasta para uploads locais (se usar)
+# pasta para uploads locais (se usar; com S3 não é obrigatório)
 RUN mkdir -p /app/uploads
 
-# ---- ENTRYPOINT script (gerado com printf; sem heredoc/aspas malucas) ----
+# ---- ENTRYPOINT script ----
 RUN printf '%s\n' \
 '#!/usr/bin/env bash' \
 'set -euo pipefail' \
