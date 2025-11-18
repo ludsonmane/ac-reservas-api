@@ -3,3 +3,5 @@
 /node_modules
 /dist"sendgrid.env" 
 sendgrid.env
+"mane-api.zip" 
+"*.zip" 
