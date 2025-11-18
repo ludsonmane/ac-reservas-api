@@ -34,6 +34,7 @@
     "@sendgrid/mail": "^7.7.0",
     "bcryptjs": "^3.0.2",
     "compression": "^1.8.1",
+    "argon2": "^0.31.2",
     "cors": "^2.8.5",
     "dayjs": "^1.11.18",
     "dotenv": "^16.4.5",
