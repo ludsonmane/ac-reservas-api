@@ -26,10 +26,6 @@ RUN npx prisma generate
 # compila TypeScript -> dist
 RUN npm run build
 
-# remove devDependencies para reduzir tamanho, mantendo argon2
-RUN npm prune --omit=dev \
- && ls -la node_modules/argon2 || (echo "argon2 sumiu apos prune" && exit 1)
-
 # -------- Runner (prod) --------
 FROM base AS runner
 WORKDIR /app
