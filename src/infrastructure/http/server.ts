@@ -91,6 +91,9 @@ export function buildServer() {
     ? path.resolve(process.env.UPLOADS_DIR)
     : path.resolve(process.cwd(), 'uploads');
 
+  // 🔎 LOGA ONDE ESTÁ SALVANDO (confira nos logs que é /data/uploads)
+  console.log('[uploads] UPLOADS_DIR =', UPLOADS_DIR);
+
   // garante pastas
   for (const sub of ['areas', 'units', 'temp']) {
     const dir = path.join(UPLOADS_DIR, sub);
