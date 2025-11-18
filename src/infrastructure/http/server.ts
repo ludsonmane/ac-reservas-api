@@ -85,7 +85,7 @@ export function buildServer() {
   app.use(cors(corsOptions));
   app.options(/.*/, cors(corsOptions) as any);
 
-  // === Static: /uploads (fotos etc.) ===
+
   // Use env UPLOADS_DIR para casar com Multer/NGINX. Fallback: ./uploads
   const UPLOADS_DIR = process.env.UPLOADS_DIR
     ? path.resolve(process.env.UPLOADS_DIR)
@@ -93,6 +93,18 @@ export function buildServer() {
 
   // 🔎 LOGA ONDE ESTÁ SALVANDO (confira nos logs que é /data/uploads)
   console.log('[uploads] UPLOADS_DIR =', UPLOADS_DIR);
+
+  // garante estrutura de diretórios para uploads
+  const AREAS_DIR = path.join(UPLOADS_DIR, 'areas');
+  const TEMP_DIR = path.join(UPLOADS_DIR, 'temp');
+  try {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    fs.mkdirSync(AREAS_DIR, { recursive: true });
+    fs.mkdirSync(TEMP_DIR, { recursive: true });
+    console.log('[uploads] ensured dirs:', { UPLOADS_DIR, AREAS_DIR, TEMP_DIR });
+  } catch (e) {
+    console.error('[uploads] failed to ensure dirs', e);
+  }
 
   // garante pastas
   for (const sub of ['areas', 'units', 'temp']) {

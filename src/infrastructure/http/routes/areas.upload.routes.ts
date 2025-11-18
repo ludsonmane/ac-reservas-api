@@ -29,15 +29,15 @@ const EXT_BY_MIME: Record<string, string> = {
 };
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, AREAS_DIR),
-  filename: (req, file, cb) => {
-    const rawId = String(req.params?.id || 'area');
-    const safeId = rawId.replace(/[^a-zA-Z0-9_-]/g, '');
-    const ts = Date.now();
-    const fromMime = EXT_BY_MIME[file?.mimetype] || '';
-    const fromName = (path.extname(file?.originalname || '') || '').toLowerCase();
-    const ext = (fromMime || fromName || '.jpeg').toLowerCase();
-    cb(null, `${safeId}-${ts}${ext}`);
+  destination: (req, file, cb) => {
+    const areaId = String(req.params.id);
+    const dir = path.join(UPLOADS_DIR, 'areas', areaId);
+    try { fs.mkdirSync(dir, { recursive: true }); } catch { }
+    cb(null, dir);
+  },
+  filename: (_req, file, cb) => {
+    const safe = path.basename(file.originalname).replace(/\s+/g, '_');
+    cb(null, `${Date.now()}-${safe}`);
   },
 });
 
