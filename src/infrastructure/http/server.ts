@@ -34,7 +34,7 @@ function parseOrigins(value?: string): (string | RegExp)[] {
     .filter(Boolean)
     .map((v) => {
       if (v.startsWith('/') && v.endsWith('/')) {
-        try { return new RegExp(v.slice(1, -1)); } catch {}
+        try { return new RegExp(v.slice(1, -1)); } catch { }
       }
       return v;
     });
@@ -136,6 +136,41 @@ export function buildServer() {
     next();
   });
 
+  // --- DEBUG STORAGE (temporário) ---
+  app.get('/__storage', async (_req, res) => {
+    try {
+      const raw = process.env.UPLOADS_DIR || '';
+      const resolved = require('path').resolve(raw || process.cwd(), 'uploads');
+      const fs = require('fs');
+      const areas = require('path').join(resolved, 'areas');
+
+      const exists = fs.existsSync(resolved);
+      const areasExists = fs.existsSync(areas);
+      let areasFiles: string[] = [];
+      try { areasFiles = areasExists ? fs.readdirSync(areas) : []; } catch { }
+
+      // teste de escrita
+      let writeOk = false;
+      try {
+        fs.writeFileSync(require('path').join(resolved, 'temp', '.probe'), String(Date.now()), { flag: 'w' });
+        writeOk = true;
+      } catch { }
+
+      res.json({
+        UPLOADS_DIR_env: raw || '(vazio)',
+        resolvedPath: resolved,
+        exists,
+        areasExists,
+        writeOk,
+        areasCount: areasFiles.length,
+        sample: areasFiles.slice(0, 10),
+      });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || String(e) });
+    }
+  });
+
+
   // Rotas públicas
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
@@ -160,7 +195,9 @@ export function buildServer() {
   } catch (e) {
     logger.warn({ e }, 'openapi.json not found, serving minimal doc');
   }
-  app.use('/docs', swaggerUi.serve, swaggerUi.setup(openapiDoc));
+  app.use('/v1/docs', swaggerUi.serve, swaggerUi.setup(openapiDoc));
+
+
 
   // 404 + erros
   app.use(notFound);
