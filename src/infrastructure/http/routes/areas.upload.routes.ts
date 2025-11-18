@@ -29,7 +29,7 @@ if (!S3_BUCKET) {
 
 /* ==========================
    Multer (buffer em memória)
-========================== */ 
+========================== */
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpeg',
@@ -97,9 +97,7 @@ router.post(
           Bucket: S3_BUCKET,
           Key: key,
           Body: file.buffer,
-          ContentType: contentType,
-          // Se bucket for privado/CloudFront, REMOVA a ACL abaixo.
-          ACL: 'public-read',
+          ContentType: contentType
         })
       );
 
