@@ -227,6 +227,7 @@ export class PrismaReservationRepository implements ReservationRepository {
           birthdayDate: true,
           phone: true,
           email: true,
+          reservationType: true, 
           unit: true,       // legado
           unitId: true,     // novo
           area: true,       // legado
