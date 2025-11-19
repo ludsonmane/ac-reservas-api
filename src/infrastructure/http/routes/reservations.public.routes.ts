@@ -5,6 +5,7 @@ import { z } from 'zod';
 import utc from 'dayjs/plugin/utc';
 import { prisma } from '../../db/client';
 import { areasService } from '../../../modules/areas/areas.service';
+import { ReservationType } from '@prisma/client';
 
 const router = Router();
 dayjs.extend(utc);
@@ -67,6 +68,17 @@ function cryptoRandom() {
 const toLowerEmail = (v?: string | null) =>
   (v ?? '').trim().toLowerCase() || null;
 
+/** Normaliza o reservationType vindo do front (string livre) p/ enum do Prisma */
+function parseReservationType(raw: unknown): ReservationType {
+  const v = String(raw ?? '').trim().toUpperCase();
+  const allowed = new Set<ReservationType>([
+    'PARTICULAR',
+    'CONFRATERNIZACAO',
+    'EMPRESA',
+  ] as ReservationType[]);
+  return allowed.has(v as ReservationType) ? (v as ReservationType) : 'PARTICULAR';
+}
+
 /* =============================================================================
    GET /v1/reservations/public/availability
 ============================================================================= */
@@ -95,6 +107,7 @@ router.get('/by-id/:id', async (req, res) => {
   const { id } = req.params;
   const r = await prisma.reservation.findUnique({
     where: { id },
+    // Retorna tudo (inclui reservationType); ajuste o select se quiser enxugar
   });
   if (!r) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
   return res.json(r);
@@ -166,6 +179,10 @@ router.post('/', async (req, res) => {
       url,
       ref,
       source,
+
+      // 👇 novos aliases aceitos do front
+      reservationType,
+      reservation_type,
     } = req.body || {};
 
     // validações básicas
@@ -187,8 +204,11 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: { code: 'VALIDATION', message: 'reservationDate inválido.' } });
     }
 
+    // normalizações
     const emailNorm = toLowerEmail(email);
     const phoneNorm = phone ? String(phone).replace(/\D+/g, '') : null;
+    // tipo de reserva (enum seguro)
+    const rType = parseReservationType(reservationType ?? reservation_type);
 
     // 🔐 anti-duplicidade: se já tem reserva ativa para esse contato, bloqueia
     if (emailNorm || phoneNorm) {
@@ -217,6 +237,7 @@ router.post('/', async (req, res) => {
         });
       }
     }
+
     // checa unidade/área
     const [unit, area] = await Promise.all([
       prisma.unit.findUnique({
@@ -323,8 +344,11 @@ router.post('/', async (req, res) => {
         qrToken,
         qrExpiresAt,
         status: 'AWAITING_CHECKIN',
+
+        // 👇 NOVO CAMPO
+        reservationType: rType,
       },
-      select: { id: true, reservationCode: true, status: true },
+      select: { id: true, reservationCode: true, status: true, reservationType: true },
     });
 
     return res.status(201).json(created);

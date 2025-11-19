@@ -27,6 +27,12 @@ enum GuestRole {
   HOST
 }
 
+enum ReservationType {
+  PARTICULAR
+  CONFRATERNIZACAO
+  EMPRESA
+}
+
 /**
  * ===== Models =====
  */
@@ -86,7 +92,7 @@ model Area {
 model Reservation {
   id              String  @id @default(uuid()) @db.VarChar(36)
   reservationCode String? @unique @db.VarChar(6)
-
+  reservationType ReservationType @default(PARTICULAR)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
