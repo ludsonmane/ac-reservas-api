@@ -5,6 +5,15 @@ import { requireAuth, requireRole } from '../middlewares/requireAuth';
 
 export const areasRouter = Router();
 
+/* ---------- URL helper p/ imagem absoluta (S3/CDN) ---------- */
+function toAbsoluteMedia(pathOrNull?: string | null): string | null {
+  if (!pathOrNull) return null;
+  if (/^https?:\/\//i.test(pathOrNull)) return pathOrNull; // já é absoluto
+  const base = (process.env.S3_PUBLIC_URL_BASE || '').replace(/\/+$/, '');
+  if (!base) return pathOrNull; // fallback: mantém relativo
+  return pathOrNull.startsWith('/') ? `${base}${pathOrNull}` : `${base}/${pathOrNull}`;
+}
+
 /* ---------- Utils ---------- */
 function toIntOrNull(v: unknown): number | null {
   if (v === '' || v === null || typeof v === 'undefined') return null;
@@ -62,13 +71,17 @@ areasRouter.get('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
       include: {
         unit: { select: { id: true, name: true, slug: true } },
       },
-      // Nota: sem select → Prisma retorna todos os campos, incluindo iconEmoji/description
     }),
     prisma.area.count({ where }),
   ]);
 
+  const payload = items.map((a) => ({
+    ...a,
+    photoUrlAbsolute: toAbsoluteMedia(a.photoUrl),
+  }));
+
   res.json({
-    items,
+    items: payload,
     total,
     page: Math.max(1, Number(page)),
     pageSize: take,
@@ -121,8 +134,15 @@ areasRouter.post('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   if (typeof descriptionRaw !== 'undefined') data.description = description; // idem
 
   try {
-    const created = await prisma.area.create({ data });
-    res.status(201).json(created);
+    const created = await prisma.area.create({
+      data,
+      include: { unit: { select: { id: true, name: true, slug: true } } },
+    });
+
+    res.status(201).json({
+      ...created,
+      photoUrlAbsolute: toAbsoluteMedia(created.photoUrl),
+    });
   } catch (e: any) {
     if (String(e?.code) === 'P2002') {
       return res.status(409).json({ error: 'Já existe uma área com esse nome nesta unidade' });
@@ -140,7 +160,10 @@ areasRouter.get('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) =>
     include: { unit: { select: { id: true, name: true, slug: true } } },
   });
   if (!a) return res.status(404).json({ error: 'Área não encontrada' });
-  res.json(a);
+  res.json({
+    ...a,
+    photoUrlAbsolute: toAbsoluteMedia(a.photoUrl),
+  });
 });
 
 /* ============================================================
@@ -201,8 +224,12 @@ async function updateArea(req: any, res: any) {
     const updated = await prisma.area.update({
       where: { id: String(req.params.id) },
       data,
+      include: { unit: { select: { id: true, name: true, slug: true } } },
     });
-    res.json(updated);
+    res.json({
+      ...updated,
+      photoUrlAbsolute: toAbsoluteMedia(updated.photoUrl),
+    });
   } catch (e: any) {
     if (String(e?.code) === 'P2025') return res.status(404).json({ error: 'Área não encontrada' });
     if (String(e?.code) === 'P2002') return res.status(409).json({ error: 'Já existe uma área com esse nome nesta unidade' });
@@ -254,5 +281,11 @@ areasRouter.get('/public/by-unit/:unitId', async (req, res) => {
     },
     orderBy: { name: 'asc' },
   });
-  res.json(items);
+
+  const payload = items.map((a) => ({
+    ...a,
+    photoUrlAbsolute: toAbsoluteMedia(a.photoUrl),
+  }));
+
+  res.json(payload);
 });
