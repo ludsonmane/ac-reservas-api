@@ -8,8 +8,8 @@ import { DeleteReservation } from '../../../application/use-cases/DeleteReservat
 import { CreateReservationDTO, UpdateReservationDTO } from '../dtos/reservation.dto';
 import { logger } from '../../../config/logger';
 import { sendReservationTicket } from '../../../services/email/sendReservationTicket';
-import { z } from 'zod'; // ✅ novo
-import { prisma } from '../../../infrastructure/db/prisma'; // ✅ novo
+import { z } from 'zod';
+import { prisma } from '../../../infrastructure/db/prisma';
 
 /* ===== Helpers ===== */
 function toInt(v: unknown, fb: number): number {
@@ -30,6 +30,16 @@ function parseDateMaybe(v: unknown): Date | undefined {
   const d = new Date(String(v));
   return Number.isNaN(+d) ? undefined : d;
 }
+/** Normaliza ID vindo na query: '', 'undefined', 'null' -> undefined */
+const asId = (v: unknown): string | undefined => {
+  const s = String(v ?? '').trim();
+  return s && s !== 'undefined' && s !== 'null' ? s : undefined;
+};
+/** Normaliza string opcional */
+const asStr = (v: unknown): string | undefined => {
+  const s = String(v ?? '').trim();
+  return s ? s : undefined;
+};
 
 export class ReservationController {
   constructor(
@@ -122,19 +132,20 @@ export class ReservationController {
   list = async (req: Request, res: Response) => {
     const page = Math.max(parseInt(String(req.query.page ?? '1'), 10), 1);
     const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize ?? '20'), 10), 1), 100);
+
     const search = String(req.query.search ?? '').trim();
-    const unit = String(req.query.unit ?? '').trim();          // LEGADO (nome/slug)
-    const unitId = String(req.query.unitId ?? '').trim();
-    const areaId = String(req.query.areaId ?? '').trim();      // ✅ NOVO
- 
+    const unit   = asStr(req.query.unit);     // LEGADO (nome/slug)
+    const unitId = asId(req.query.unitId);    // ✅ normalizado
+    const areaId = asId(req.query.areaId);    // ✅ normalizado
+
     const from = parseDateMaybe(req.query.from);
-    const to = parseDateMaybe(req.query.to);
+    const to   = parseDateMaybe(req.query.to);
 
     const { items, total } = await this.listUC.execute({
       search,
-      unit,                                   // legado
-      areaId: areaId || undefined,            // ✅ passa se vier
+      unit,
       unitId,
+      areaId,
       from,
       to,
       skip: (page - 1) * pageSize,
