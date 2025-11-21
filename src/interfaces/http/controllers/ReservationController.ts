@@ -133,13 +133,21 @@ export class ReservationController {
     const page = Math.max(parseInt(String(req.query.page ?? '1'), 10), 1);
     const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize ?? '20'), 10), 1), 100);
 
-    const search = String(req.query.search ?? '').trim();
-    const unit   = asStr(req.query.unit);     // LEGADO (nome/slug)
-    const unitId = asId(req.query.unitId);    // normalizado
-    const areaId = asId(req.query.areaId);    // normalizado
+    // aliases para search
+    const search =
+      asStr(req.query.search) ??
+      asStr(req.query.q) ??
+      asStr(req.query.query) ??
+      '';
+
+    // unidade: legado e variações
+    const unit   = asStr(req.query.unit) ?? asStr(req.query.unitSlug) ?? asStr(req.query.unit_slug);
+    // ids: aceitam camelCase e snake_case
+    const unitId = asId(req.query.unitId) ?? asId(req.query.unit_id);
+    const areaId = asId(req.query.areaId) ?? asId(req.query.area_id);
 
     const from = parseDateMaybe(req.query.from);
-    const to   = parseDateMaybe(req.query.to); // repositório trata como inclusivo
+    const to   = parseDateMaybe(req.query.to); // repositório trata "to" como inclusivo
 
     const { items, total } = await this.listUC.execute({
       search,
