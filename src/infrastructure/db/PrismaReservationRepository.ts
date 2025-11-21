@@ -26,7 +26,7 @@ async function uniqueReservationCode(): Promise<string> {
 }
 
 function isValidDate(d?: Date) {
-  return !!d && Number.isFinite(+d);
+  return !!d && Number.isFinite(+d!);
 }
 
 export class PrismaReservationRepository implements ReservationRepository {
@@ -154,41 +154,66 @@ export class PrismaReservationRepository implements ReservationRepository {
     const safeTake = Math.min(100, Math.max(1, Number(take) || 20));
     const q = (search ?? '').toString().trim();
 
-    // Busca direta por localizador (6 chars)
+    // Fast-path: busca direta por localizador (6 chars)
     if (q && /^[A-Z0-9]{6}$/i.test(q)) {
       const code = q.toUpperCase();
-      const hit = await prisma.reservation.findUnique({
-        where: { reservationCode: code },
-        select: {
-          id: true,
-          reservationCode: true,
-          fullName: true,
-          cpf: true,
-          people: true,
-          kids: true,
-          reservationDate: true,
-          birthdayDate: true,
-          phone: true,
-          email: true,
-          unit: true,       // legado
-          unitId: true,     // novo
-          area: true,       // legado
-          areaId: true,     // novo
-          areaName: true,   // denormalizado
-          status: true,
-          createdAt: true,
-          updatedAt: true,
-          utm_source: true,
-          utm_campaign: true,
-        },
-      });
+
+      const [hit, unitRow] = await Promise.all([
+        prisma.reservation.findUnique({
+          where: { reservationCode: code },
+          select: {
+            id: true,
+            reservationCode: true,
+            fullName: true,
+            cpf: true,
+            people: true,
+            kids: true,
+            reservationDate: true,
+            birthdayDate: true,
+            phone: true,
+            email: true,
+            unit: true,       // legado (slug/nome)
+            unitId: true,     // novo (ID)
+            area: true,       // legado
+            areaId: true,     // novo
+            areaName: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+            utm_source: true,
+            utm_campaign: true,
+          },
+        }),
+        unitId
+          ? prisma.unit.findUnique({
+              where: { id: String(unitId) },
+              select: { slug: true, name: true },
+            })
+          : Promise.resolve(null),
+      ]);
+
       if (!hit) return { items: [], total: 0 };
+
+      // filtro por unit (LEGADO) se veio 'unit' explícito
       if (unit && hit.unit && unit !== hit.unit) return { items: [], total: 0 };
-      if (unitId && hit.unitId && unitId !== hit.unitId) return { items: [], total: 0 }; // aplica unitId no atalho
-      if (areaId && hit.areaId && areaId !== hit.areaId) return { items: [], total: 0 };
+
+      // filtro por unitId: aceita se bater por ID OU por slug/nome legado da unidade
+      if (unitId) {
+        const legacyMatch = unitRow?.slug || unitRow?.name;
+        const matchesById = !!hit.unitId && hit.unitId === unitId;
+        const matchesByLegacy = !!legacyMatch && !!hit.unit && hit.unit === legacyMatch;
+        if (!matchesById && !matchesByLegacy) return { items: [], total: 0 };
+      }
+
+      // filtro por areaId
+      if (areaId) {
+        if (!hit.areaId || hit.areaId !== areaId) return { items: [], total: 0 };
+      }
+
       return { items: [hit as any], total: 1 };
     }
 
+    // Caminho normal
     const where: Prisma.ReservationWhereInput = {};
 
     if (q) {
@@ -205,8 +230,7 @@ export class PrismaReservationRepository implements ReservationRepository {
     if (unit) where.unit = unit; // legado (slug/nome)
 
     if (unitId) {
-      // ✅ Suporte a dados legados: muitos registros antigos não têm unitId, apenas unit (slug/nome).
-      // Tentamos resolver o slug/nome da unidade e aplicamos OR: (unitId = X) OR (unit = slug/name)
+      // ✅ dados legados: OR entre unitId e unit (slug/nome)
       try {
         const unitRow = await prisma.unit.findUnique({
           where: { id: String(unitId) },
@@ -214,9 +238,8 @@ export class PrismaReservationRepository implements ReservationRepository {
         });
         const legacyMatch = unitRow?.slug || unitRow?.name;
         if (legacyMatch) {
-          where.OR = (where.OR || []).concat([{ unitId: unitId }, { unit: legacyMatch }]);
+          where.OR = (where.OR || []).concat([{ unitId }, { unit: legacyMatch }]);
         } else {
-          // se não achou a unidade, mantemos o filtro por unitId
           (where as any).unitId = unitId;
         }
       } catch {
