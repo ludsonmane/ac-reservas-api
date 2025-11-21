@@ -135,11 +135,11 @@ export class ReservationController {
 
     const search = String(req.query.search ?? '').trim();
     const unit   = asStr(req.query.unit);     // LEGADO (nome/slug)
-    const unitId = asId(req.query.unitId);    // ✅ normalizado
-    const areaId = asId(req.query.areaId);    // ✅ normalizado
+    const unitId = asId(req.query.unitId);    // normalizado
+    const areaId = asId(req.query.areaId);    // normalizado
 
     const from = parseDateMaybe(req.query.from);
-    const to   = parseDateMaybe(req.query.to);
+    const to   = parseDateMaybe(req.query.to); // repositório trata como inclusivo
 
     const { items, total } = await this.listUC.execute({
       search,

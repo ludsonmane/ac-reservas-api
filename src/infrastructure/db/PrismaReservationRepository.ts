@@ -148,7 +148,7 @@ export class PrismaReservationRepository implements ReservationRepository {
     throw new Error('Não foi possível criar a reserva com um reservationCode único');
   }
 
-  // ✅ inclui areaId
+  // ✅ unitId + fallback legado (unit slug/name) + to inclusivo
   async findMany({ search, unit, unitId, areaId, from, to, skip, take }: FindManyParams) {
     const safeSkip = Math.max(0, Number(skip) || 0);
     const safeTake = Math.min(100, Math.max(1, Number(take) || 20));
@@ -184,8 +184,8 @@ export class PrismaReservationRepository implements ReservationRepository {
       });
       if (!hit) return { items: [], total: 0 };
       if (unit && hit.unit && unit !== hit.unit) return { items: [], total: 0 };
-      if (unitId && hit.unitId && unitId !== hit.unitId) return { items: [], total: 0 }; // ✅ NOVO
-      if (areaId && hit.areaId && areaId !== hit.areaId) return { items: [], total: 0 }; // ✅ aplica também no atalho
+      if (unitId && hit.unitId && unitId !== hit.unitId) return { items: [], total: 0 }; // aplica unitId no atalho
+      if (areaId && hit.areaId && areaId !== hit.areaId) return { items: [], total: 0 };
       return { items: [hit as any], total: 1 };
     }
 
@@ -198,20 +198,43 @@ export class PrismaReservationRepository implements ReservationRepository {
         { phone: { contains: q } },
         { cpf: { contains: q } },
         { utm_campaign: { contains: q } },
-        { reservationCode: { contains: q.toUpperCase?.() || q } },
+        { reservationCode: { contains: (q as any).toUpperCase?.() || q } },
       ];
     }
 
-    if (unit) where.unit = unit;         // legado
-    if (unitId) where.unitId = unitId;   // ✅ novo
-    if (areaId) where.areaId = areaId;   // ✅ novo
+    if (unit) where.unit = unit; // legado (slug/nome)
 
- 
+    if (unitId) {
+      // ✅ Suporte a dados legados: muitos registros antigos não têm unitId, apenas unit (slug/nome).
+      // Tentamos resolver o slug/nome da unidade e aplicamos OR: (unitId = X) OR (unit = slug/name)
+      try {
+        const unitRow = await prisma.unit.findUnique({
+          where: { id: String(unitId) },
+          select: { slug: true, name: true },
+        });
+        const legacyMatch = unitRow?.slug || unitRow?.name;
+        if (legacyMatch) {
+          where.OR = (where.OR || []).concat([{ unitId: unitId }, { unit: legacyMatch }]);
+        } else {
+          // se não achou a unidade, mantemos o filtro por unitId
+          (where as any).unitId = unitId;
+        }
+      } catch {
+        (where as any).unitId = unitId;
+      }
+    }
+
+    if (areaId) (where as any).areaId = areaId;
 
     if (isValidDate(from) || isValidDate(to)) {
-      where.reservationDate = {};
-      if (isValidDate(from)) where.reservationDate.gte = from!;
-      if (isValidDate(to)) where.reservationDate.lte = to!;
+      (where as any).reservationDate = {};
+      if (isValidDate(from)) (where as any).reservationDate.gte = from!;
+      if (isValidDate(to)) {
+        // ✅ inclui o dia inteiro do "to"
+        const end = new Date(to!);
+        end.setHours(23, 59, 59, 999);
+        (where as any).reservationDate.lte = end;
+      }
     }
 
     const [items, total] = await Promise.all([
@@ -331,9 +354,8 @@ export class PrismaReservationRepository implements ReservationRepository {
     await prisma.reservation.delete({ where: { id } });
   }
 
-  // ✅ NOVO: inserir convidados em massa (usa prisma.guest)
+  // ✅ Inserir convidados em massa (usa prisma.guest)
   async addGuestsBulk(reservationId: string, guests: GuestInput[]) {
-    // Verifica se a reserva existe
     const exists = await prisma.reservation.findUnique({
       where: { id: reservationId },
       select: { id: true }
@@ -342,7 +364,6 @@ export class PrismaReservationRepository implements ReservationRepository {
       throw new Error('RESERVATION_NOT_FOUND');
     }
 
-    // Normaliza / filtra e deduplica por e-mail no payload
     const seen = new Set<string>();
     const normalized = guests
       .map((g) => {
