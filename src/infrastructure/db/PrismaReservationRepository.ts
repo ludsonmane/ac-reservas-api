@@ -149,7 +149,7 @@ export class PrismaReservationRepository implements ReservationRepository {
   }
 
   // ✅ inclui areaId
-  async findMany({ search, unit, areaId, from, to, skip, take }: FindManyParams) {
+  async findMany({ search, unit, areaId, unitId, from, to, skip, take }: FindManyParams) {
     const safeSkip = Math.max(0, Number(skip) || 0);
     const safeTake = Math.min(100, Math.max(1, Number(take) || 20));
     const q = (search ?? '').toString().trim();
@@ -203,6 +203,7 @@ export class PrismaReservationRepository implements ReservationRepository {
 
     if (unit) where.unit = unit;         // legado
     if (areaId) where.areaId = areaId;   // ✅ novo
+    if (unitId) where.unitId = unitId; 
 
     if (isValidDate(from) || isValidDate(to)) {
       where.reservationDate = {};

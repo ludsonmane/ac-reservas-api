@@ -124,7 +124,9 @@ export class ReservationController {
     const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize ?? '20'), 10), 1), 100);
     const search = String(req.query.search ?? '').trim();
     const unit = String(req.query.unit ?? '').trim();          // LEGADO (nome/slug)
+    const unitId = String(req.query.unitId ?? '').trim();
     const areaId = String(req.query.areaId ?? '').trim();      // ✅ NOVO
+ 
     const from = parseDateMaybe(req.query.from);
     const to = parseDateMaybe(req.query.to);
 
@@ -132,6 +134,7 @@ export class ReservationController {
       search,
       unit,                                   // legado
       areaId: areaId || undefined,            // ✅ passa se vier
+      unitId,
       from,
       to,
       skip: (page - 1) * pageSize,

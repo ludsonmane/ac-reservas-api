@@ -8,6 +8,8 @@ export interface FindManyParams {
   /** Unidade (ex.: 'aguas-claras') — legado (nome/slug) */
   unit?: string;
   /** Filtro de data inicial (inclusive) para reservationDate */
+  unitId?: string;    // ✅ NOVO (ID relacional)
+  
   from?: Date;
   /** Filtro de data final (inclusive) para reservationDate */
   to?: Date;
