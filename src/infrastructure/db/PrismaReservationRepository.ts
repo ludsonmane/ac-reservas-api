@@ -75,7 +75,6 @@ export class PrismaReservationRepository implements ReservationRepository {
     const payload = {
       ...data,
 
-      // números
       kids:
         typeof data?.kids === 'number'
           ? data.kids
@@ -88,7 +87,6 @@ export class PrismaReservationRepository implements ReservationRepository {
           ? Math.max(1, Math.trunc(data.people))
           : Math.max(1, Number.isFinite(Number(data?.people)) ? Math.trunc(Number(data?.people)) : 1),
 
-      // datas
       reservationDate:
         data?.reservationDate instanceof Date
           ? data.reservationDate
@@ -148,7 +146,7 @@ export class PrismaReservationRepository implements ReservationRepository {
     throw new Error('Não foi possível criar a reserva com um reservationCode único');
   }
 
-  // ✅ unitId + fallback legado (unit slug/name) + to inclusivo
+  // ✅ unitId + fallback legado (apenas com unitId NULL) + to inclusivo + AND global
   async findMany({ search, unit, unitId, areaId, from, to, skip, take }: FindManyParams) {
     const safeSkip = Math.max(0, Number(skip) || 0);
     const safeTake = Math.min(100, Math.max(1, Number(take) || 20));
@@ -197,11 +195,11 @@ export class PrismaReservationRepository implements ReservationRepository {
       // filtro por unit (LEGADO) se veio 'unit' explícito
       if (unit && hit.unit && unit !== hit.unit) return { items: [], total: 0 };
 
-      // filtro por unitId: aceita se bater por ID OU por slug/nome legado da unidade
+      // filtro por unitId com fallback LEGADO **apenas quando hit.unitId é null**
       if (unitId) {
         const legacyMatch = unitRow?.slug || unitRow?.name;
         const matchesById = !!hit.unitId && hit.unitId === unitId;
-        const matchesByLegacy = !!legacyMatch && !!hit.unit && hit.unit === legacyMatch;
+        const matchesByLegacy = !!legacyMatch && !!hit.unit && hit.unit === legacyMatch && (hit.unitId === null || hit.unitId === undefined);
         if (!matchesById && !matchesByLegacy) return { items: [], total: 0 };
       }
 
@@ -213,52 +211,70 @@ export class PrismaReservationRepository implements ReservationRepository {
       return { items: [hit as any], total: 1 };
     }
 
-    // Caminho normal
-    const where: Prisma.ReservationWhereInput = {};
+    // Caminho normal: construir AND global
+    const and: Prisma.ReservationWhereInput[] = [];
 
+    // (1) Search como OR interno
     if (q) {
-      where.OR = [
-        { fullName: { contains: q } },
-        { email: { contains: q } },
-        { phone: { contains: q } },
-        { cpf: { contains: q } },
-        { utm_campaign: { contains: q } },
-        { reservationCode: { contains: (q as any).toUpperCase?.() || q } },
-      ];
+      and.push({
+        OR: [
+          { fullName: { contains: q } },
+          { email: { contains: q } },
+          { phone: { contains: q } },
+          { cpf: { contains: q } },
+          { utm_campaign: { contains: q } },
+          { reservationCode: { contains: (q as any).toUpperCase?.() || q } },
+        ],
+      });
     }
 
-    if (unit) where.unit = unit; // legado (slug/nome)
+    // (2) Filtro por unidade (legado e unitId)
+    if (unit) {
+      and.push({ unit }); // legado (slug/nome)
+    }
 
     if (unitId) {
-      // ✅ dados legados: OR entre unitId e unit (slug/nome)
       try {
         const unitRow = await prisma.unit.findUnique({
           where: { id: String(unitId) },
           select: { slug: true, name: true },
         });
         const legacyMatch = unitRow?.slug || unitRow?.name;
+
         if (legacyMatch) {
-          where.OR = (where.OR || []).concat([{ unitId }, { unit: legacyMatch }]);
+          // ✅ Aceita por ID OU por legado APENAS quando unitId do registro é NULL
+          and.push({
+            OR: [
+              { unitId },
+              { AND: [{ unit: legacyMatch }, { unitId: null }] },
+            ],
+          });
         } else {
-          (where as any).unitId = unitId;
+          and.push({ unitId });
         }
       } catch {
-        (where as any).unitId = unitId;
+        and.push({ unitId });
       }
     }
 
-    if (areaId) (where as any).areaId = areaId;
+    // (3) Filtro por área
+    if (areaId) and.push({ areaId });
 
+    // (4) Intervalo de datas (to inclusivo)
     if (isValidDate(from) || isValidDate(to)) {
-      (where as any).reservationDate = {};
-      if (isValidDate(from)) (where as any).reservationDate.gte = from!;
+      const dateWhere: Prisma.ReservationWhereInput = {};
+      const range: Prisma.DateTimeFilter = {};
+      if (isValidDate(from)) range.gte = from!;
       if (isValidDate(to)) {
-        // ✅ inclui o dia inteiro do "to"
         const end = new Date(to!);
         end.setHours(23, 59, 59, 999);
-        (where as any).reservationDate.lte = end;
+        range.lte = end;
       }
+      dateWhere.reservationDate = range;
+      and.push(dateWhere);
     }
+
+    const where: Prisma.ReservationWhereInput = and.length ? { AND: and } : {};
 
     const [items, total] = await Promise.all([
       prisma.reservation.findMany({
