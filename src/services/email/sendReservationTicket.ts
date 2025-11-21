@@ -1,48 +1,55 @@
 // src/services/email/sendReservationTicket.ts
-import sgMail from "@sendgrid/mail";
-import { z } from "zod";
-import QRCode from "qrcode";
+import sgMail from '@sendgrid/mail';
+import { z } from 'zod';
+import QRCode from 'qrcode';
 
 const envSchema = z.object({
   SENDGRID_API_KEY: z.string().min(10),
   MAIL_FROM: z.string().email(),
-  MAIL_FROM_NAME: z.string().optional().default("Mané Mercado"),
+  MAIL_FROM_NAME: z.string().optional().default('Mané Mercado'),
   MAIL_REPLY_TO: z.string().email().optional(),
   MAIL_BCC: z.string().email().optional(),
-  MAIL_PRIMARY_COLOR: z.string().optional().default("#0f172a"),
-  MAIL_ACCENT_COLOR: z.string().optional().default("#0ea5e9"),
-  MAIL_LOGO_BASE64: z.string().optional(),
-  MAIL_LOGO_URL: z.string().url().optional(),
-  // base da página pública de consulta
-  MAIL_CONSULT_BASE: z.string().url().optional().default("https://reservas.mane.com.vc"),
+  MAIL_PRIMARY_COLOR: z.string().optional().default('#0f172a'),
+  MAIL_ACCENT_COLOR: z.string().optional().default('#0ea5e9'),
+  MAIL_LOGO_BASE64: z.string().optional(),     // data:image/png;base64,....
+  MAIL_LOGO_URL: z.string().url().optional(),  // URL pública da logo
+  MAIL_CONSULT_BASE: z
+    .string()
+    .url()
+    .optional()
+    .default('https://reservas.mane.com.vc'),
 });
 
 const reservationSchema = z.object({
-  id: z.string(),                              // interno (fallback)
-  reservationCode: z.string().optional(),      // <-- código de rastreio (preferido)
-  code: z.string().optional(),                 // compat (caso venha com outro nome)
+  id: z.string(),
+  reservationCode: z.string().optional(),
+  code: z.string().optional(),
   fullName: z.string(),
   email: z.string().email(),
   phone: z.string().optional(),
   people: z.number().int().positive(),
-  kids: z.number().int().nonnegative().optional(), // <-- crianças
+  kids: z.number().int().nonnegative().optional(),
   unit: z.string(),
   table: z.string().optional(),
-  reservationDate: z.string(),                 // ISO
+  reservationDate: z.string(), // ISO
   notes: z.string().optional(),
-  checkinUrl: z.string().url(),                // usado para gerar o QR
+  checkinUrl: z.string().url(),
 });
 
 export type ReservationTicket = z.infer<typeof reservationSchema>;
 
 /* helpers */
 function toTitle(s?: string | null) {
-  if (!s) return "";
-  return s.toLowerCase().split(/[\s\-]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+  if (!s) return '';
+  return s
+    .toLowerCase()
+    .split(/[\s\-]+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
 }
 function formatPhoneBR(p?: string) {
-  if (!p) return "";
-  const d = p.replace(/\D/g, "");
+  if (!p) return '';
+  const d = p.replace(/\D/g, '');
   if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
   if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
   return p;
@@ -51,24 +58,27 @@ function formatPhoneBR(p?: string) {
 function buildHtml(
   ticket: ReservationTicket,
   qrCid: string,
-  logoCid: string | null,
+  logo: { cid?: string; url?: string } | null,
   colors: { primary: string; accent: string },
   consultUrl: string,
   codeTxt: string
 ) {
   const date = new Date(ticket.reservationDate);
-  const dateFmt = date.toLocaleString("pt-BR", { dateStyle: "full", timeStyle: "short" });
+  const dateFmt = date.toLocaleString('pt-BR', { dateStyle: 'full', timeStyle: 'short' });
   const unitFmt = toTitle(ticket.unit);
   const phoneFmt = formatPhoneBR(ticket.phone);
+
+  const logoHtml = logo?.cid
+    ? `<img src="cid:${logo.cid}" alt="Mané Mercado" style="height:28px;display:inline-block;"/>`
+    : logo?.url
+    ? `<img src="${logo.url}" alt="Mané Mercado" style="height:28px;display:inline-block;"/>`
+    : `<div style="font-weight:700;font-size:18px;color:#0f172a;">Mané Mercado</div>`;
 
   return `
   <div style="background:#f6f7f9;padding:24px 12px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;">
     <div style="max-width:680px;margin:0 auto;background:#fff;border-radius:16px;box-shadow:0 6px 22px rgba(2,6,23,.06);overflow:hidden;">
       <div style="padding:16px 0;text-align:center;">
-        ${logoCid
-      ? `<img src="cid:${logoCid}" alt="Mané Mercado" style="height:28px;display:inline-block;"/>`
-      : `<div style="font-weight:700;font-size:18px;color:#0f172a;">Mané Mercado</div>`
-    }
+        ${logoHtml}
       </div>
 
       <div style="background:${colors.primary};color:#fff;padding:22px;border-radius:14px;margin:0 20px;">
@@ -130,75 +140,92 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
   // Código preferido = reservationCode; fallback = code; por fim, id
   const codeTxt = ticket.reservationCode || ticket.code || ticket.id;
 
-  // URL pública fixa para consulta
-  const baseConsult = env.MAIL_CONSULT_BASE.replace(/\/$/, "");
+  // URL pública para consulta
+  const baseConsult = env.MAIL_CONSULT_BASE.replace(/\/$/, '');
   const consultUrl = `${baseConsult}/consultar?codigo=${encodeURIComponent(codeTxt)}`;
 
   // QR inline
-  const qrPng = await QRCode.toBuffer(ticket.checkinUrl, { errorCorrectionLevel: "M", margin: 1, width: 600 });
-  const qrCid = "qrTicket";
-  const logoCid: string | null = env.MAIL_LOGO_BASE64 || env.MAIL_LOGO_URL ? "logoCid" : null;
+  const qrPng = await QRCode.toBuffer(ticket.checkinUrl, {
+    errorCorrectionLevel: 'M',
+    margin: 1,
+    width: 600,
+  });
+  const qrCid = 'qrTicket';
+
+  // Logo: se base64 -> inline (cid). Se URL -> usa URL (sem anexar).
+  const logo: { cid?: string; url?: string } | null =
+    env.MAIL_LOGO_BASE64
+      ? { cid: 'logoCid' }
+      : env.MAIL_LOGO_URL
+      ? { url: env.MAIL_LOGO_URL }
+      : null;
 
   const html = buildHtml(
     ticket,
     qrCid,
-    logoCid,
+    logo,
     { primary: env.MAIL_PRIMARY_COLOR, accent: env.MAIL_ACCENT_COLOR },
     consultUrl,
-    codeTxt)
+    codeTxt
+  );
+
   const text = [
     `Sua reserva foi confirmada — ${toTitle(ticket.unit)}`,
     `Código: ${codeTxt}`,
-    `Data/hora: ${new Date(ticket.reservationDate).toLocaleString("pt-BR")}`,
+    `Data/hora: ${new Date(ticket.reservationDate).toLocaleString('pt-BR')}`,
     `Pessoas: ${ticket.people}`,
-    ticket.kids && ticket.kids > 0 ? `Crianças: ${ticket.kids}` : "",
-    ticket.table ? `Mesa: ${ticket.table}` : "",
-    ticket.phone ? `Telefone: ${formatPhoneBR(ticket.phone)}` : "",
-    ticket.notes ? `Obs: ${ticket.notes}` : "",
+    ticket.kids && ticket.kids > 0 ? `Crianças: ${ticket.kids}` : '',
+    ticket.table ? `Mesa: ${ticket.table}` : '',
+    ticket.phone ? `Telefone: ${formatPhoneBR(ticket.phone)}` : '',
+    ticket.notes ? `Obs: ${ticket.notes}` : '',
     `Consultar: ${consultUrl}`,
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   const attachments: Array<any> = [
     {
-      content: qrPng.toString("base64"),
-      filename: "qr-reserva.png",
-      type: "image/png",
-      disposition: "inline",
+      content: qrPng.toString('base64'),
+      filename: 'qr-reserva.png',
+      type: 'image/png',
+      disposition: 'inline',
       content_id: qrCid,
     },
   ];
-  if (logoCid && env.MAIL_LOGO_BASE64) {
+  if (logo?.cid && env.MAIL_LOGO_BASE64) {
+    // MAIL_LOGO_BASE64 deve vir "data:image/png;base64,AAAA..." ou só base64
+    const base64 = env.MAIL_LOGO_BASE64.includes('base64,')
+      ? env.MAIL_LOGO_BASE64.split('base64,').pop()!
+      : env.MAIL_LOGO_BASE64;
     attachments.push({
-      content: env.MAIL_LOGO_BASE64,
-      filename: "logo.png",
-      type: "image/png",
-      disposition: "inline",
-      content_id: logoCid,
+      content: base64,
+      filename: 'logo.png',
+      type: 'image/png',
+      disposition: 'inline',
+      content_id: logo.cid,
     });
   }
 
-  const msg = {
+  const msg: sgMail.MailDataRequired = {
     to: ticket.email,
     from: { email: env.MAIL_FROM, name: env.MAIL_FROM_NAME },
-    ...(env.MAIL_REPLY_TO ? { reply_to: { email: env.MAIL_REPLY_TO } } : {}),
+    ...(env.MAIL_REPLY_TO ? { replyTo: env.MAIL_REPLY_TO } : {}),
     ...(env.MAIL_BCC ? { bcc: env.MAIL_BCC } : {}),
-    subject: `Sua reserva confirmada • ${toTitle(ticket.unit)} • #${codeTxt}`, // usa reservationCode
-    content: [
-      { type: "text/plain", value: text },
-      { type: "text/html", value: html },
-    ],
+    subject: `Sua reserva confirmada • ${toTitle(ticket.unit)} • #${codeTxt}`,
+    text,
+    html,
     attachments,
-    categories: ["reservas", "ticket"],
-    headers: { "X-Reservation-Id": ticket.id },
+    categories: ['reservas', 'ticket'],
+    headers: { 'X-Reservation-Id': ticket.id },
     mailSettings: { sandboxMode: { enable: false } },
     trackingSettings: {
       clickTracking: { enable: false, enableText: false },
       openTracking: { enable: false },
     },
-  } as const;
+  };
 
   try {
-    const [resp] = await sgMail.send(msg as unknown as sgMail.MailDataRequired, false);
+    const [resp] = await sgMail.send(msg);
     return { status: resp?.statusCode ?? 0 };
   } catch (e: any) {
     const sg = e?.response?.body;

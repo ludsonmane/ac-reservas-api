@@ -6,6 +6,7 @@ import { ReservationRepository, FindManyParams } from '../../application/ports/R
 import type { GuestInput } from '../../application/ports/ReservationRepository';
 
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sem I, O, 0, 1 p/ evitar confusão
+
 function genCode(len = 6) {
   const bytes = crypto.randomBytes(len);
   let s = '';
@@ -27,6 +28,14 @@ async function uniqueReservationCode(): Promise<string> {
 
 function isValidDate(d?: Date) {
   return !!d && Number.isFinite(+d!);
+}
+
+function slugify(s?: string) {
+  return (s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
 }
 
 export class PrismaReservationRepository implements ReservationRepository {
@@ -197,9 +206,13 @@ export class PrismaReservationRepository implements ReservationRepository {
 
       // filtro por unitId com fallback LEGADO **apenas quando hit.unitId é null**
       if (unitId) {
-        const legacyMatch = unitRow?.slug || unitRow?.name;
+        const legacySlugOrName = [unitRow?.slug, unitRow?.name].filter(Boolean) as string[];
+        const hitUnit = hit.unit || '';
         const matchesById = !!hit.unitId && hit.unitId === unitId;
-        const matchesByLegacy = !!legacyMatch && !!hit.unit && hit.unit === legacyMatch && (hit.unitId === null || hit.unitId === undefined);
+        const matchesByLegacy =
+          (hit.unitId === null || hit.unitId === undefined) &&
+          legacySlugOrName.some((c) => hitUnit === c || slugify(hitUnit) === slugify(c));
+
         if (!matchesById && !matchesByLegacy) return { items: [], total: 0 };
       }
 
@@ -239,19 +252,22 @@ export class PrismaReservationRepository implements ReservationRepository {
           where: { id: String(unitId) },
           select: { slug: true, name: true },
         });
-        const legacyMatch = unitRow?.slug || unitRow?.name;
 
-        if (legacyMatch) {
-          // ✅ Aceita por ID OU por legado APENAS quando unitId do registro é NULL
-          and.push({
-            OR: [
-              { unitId },
-              { AND: [{ unit: legacyMatch }, { unitId: null }] },
-            ],
+        const orForLegacy: Prisma.ReservationWhereInput[] = [{ unitId }];
+
+        // ✅ Fallback seguro: só aceita por 'unit' quando unitId do registro é NULL
+        if (unitRow?.slug) {
+          orForLegacy.push({
+            AND: [{ unit: { equals: unitRow.slug } }, { unitId: null }],
           });
-        } else {
-          and.push({ unitId });
         }
+        if (unitRow?.name) {
+          orForLegacy.push({
+            AND: [{ unit: { equals: unitRow.name } }, { unitId: null }],
+          });
+        }
+
+        and.push({ OR: orForLegacy });
       } catch {
         and.push({ unitId });
       }
@@ -262,7 +278,6 @@ export class PrismaReservationRepository implements ReservationRepository {
 
     // (4) Intervalo de datas (to inclusivo)
     if (isValidDate(from) || isValidDate(to)) {
-      const dateWhere: Prisma.ReservationWhereInput = {};
       const range: Prisma.DateTimeFilter = {};
       if (isValidDate(from)) range.gte = from!;
       if (isValidDate(to)) {
@@ -270,8 +285,7 @@ export class PrismaReservationRepository implements ReservationRepository {
         end.setHours(23, 59, 59, 999);
         range.lte = end;
       }
-      dateWhere.reservationDate = range;
-      and.push(dateWhere);
+      and.push({ reservationDate: range });
     }
 
     const where: Prisma.ReservationWhereInput = and.length ? { AND: and } : {};
