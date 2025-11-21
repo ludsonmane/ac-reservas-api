@@ -6,7 +6,6 @@ import { ReservationRepository, FindManyParams } from '../../application/ports/R
 import type { GuestInput } from '../../application/ports/ReservationRepository';
 
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sem I, O, 0, 1 p/ evitar confusão
-
 function genCode(len = 6) {
   const bytes = crypto.randomBytes(len);
   let s = '';
@@ -28,14 +27,6 @@ async function uniqueReservationCode(): Promise<string> {
 
 function isValidDate(d?: Date) {
   return !!d && Number.isFinite(+d!);
-}
-
-function slugify(s?: string) {
-  return (s || '')
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
 }
 
 export class PrismaReservationRepository implements ReservationRepository {
@@ -155,7 +146,7 @@ export class PrismaReservationRepository implements ReservationRepository {
     throw new Error('Não foi possível criar a reserva com um reservationCode único');
   }
 
-  // ✅ unitId + fallback legado (apenas com unitId NULL) + to inclusivo + AND global
+  // ✅ unitId ESTRITO (sem legado quando informado) + to inclusivo + AND global
   async findMany({ search, unit, unitId, areaId, from, to, skip, take }: FindManyParams) {
     const safeSkip = Math.max(0, Number(skip) || 0);
     const safeTake = Math.min(100, Math.max(1, Number(take) || 20));
@@ -165,71 +156,52 @@ export class PrismaReservationRepository implements ReservationRepository {
     if (q && /^[A-Z0-9]{6}$/i.test(q)) {
       const code = q.toUpperCase();
 
-      const [hit, unitRow] = await Promise.all([
-        prisma.reservation.findUnique({
-          where: { reservationCode: code },
-          select: {
-            id: true,
-            reservationCode: true,
-            fullName: true,
-            cpf: true,
-            people: true,
-            kids: true,
-            reservationDate: true,
-            birthdayDate: true,
-            phone: true,
-            email: true,
-            unit: true,       // legado (slug/nome)
-            unitId: true,     // novo (ID)
-            area: true,       // legado
-            areaId: true,     // novo
-            areaName: true,
-            status: true,
-            createdAt: true,
-            updatedAt: true,
-            utm_source: true,
-            utm_campaign: true,
-          },
-        }),
-        unitId
-          ? prisma.unit.findUnique({
-              where: { id: String(unitId) },
-              select: { slug: true, name: true },
-            })
-          : Promise.resolve(null),
-      ]);
+      const hit = await prisma.reservation.findUnique({
+        where: { reservationCode: code },
+        select: {
+          id: true,
+          reservationCode: true,
+          fullName: true,
+          cpf: true,
+          people: true,
+          kids: true,
+          reservationDate: true,
+          birthdayDate: true,
+          phone: true,
+          email: true,
+          unit: true,       // legado (slug/nome)
+          unitId: true,     // novo (ID)
+          area: true,       // legado
+          areaId: true,     // novo
+          areaName: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          utm_source: true,
+          utm_campaign: true,
+        },
+      });
 
       if (!hit) return { items: [], total: 0 };
 
-      // filtro por unit (LEGADO) se veio 'unit' explícito
+      // Se veio unitId na query, o hit PRECISA ter o mesmo unitId (sem legado)
+      if (unitId && hit.unitId !== unitId) return { items: [], total: 0 };
+
+      // Se veio areaId, precisa bater estritamente
+      if (areaId && hit.areaId !== areaId) return { items: [], total: 0 };
+
+      // (Opcional) Se veio 'unit' legado na query, respeita
       if (unit && hit.unit && unit !== hit.unit) return { items: [], total: 0 };
-
-      // filtro por unitId com fallback LEGADO **apenas quando hit.unitId é null**
-      if (unitId) {
-        const legacySlugOrName = [unitRow?.slug, unitRow?.name].filter(Boolean) as string[];
-        const hitUnit = hit.unit || '';
-        const matchesById = !!hit.unitId && hit.unitId === unitId;
-        const matchesByLegacy =
-          (hit.unitId === null || hit.unitId === undefined) &&
-          legacySlugOrName.some((c) => hitUnit === c || slugify(hitUnit) === slugify(c));
-
-        if (!matchesById && !matchesByLegacy) return { items: [], total: 0 };
-      }
-
-      // filtro por areaId
-      if (areaId) {
-        if (!hit.areaId || hit.areaId !== areaId) return { items: [], total: 0 };
-      }
 
       return { items: [hit as any], total: 1 };
     }
 
-    // Caminho normal: construir AND global
-    const and: Prisma.ReservationWhereInput[] = [];
+    // Caminho normal: AND global
+    const AND: Prisma.ReservationWhereInput[] = [];
 
     // (1) Search como OR interno
     if (q) {
-      and.push({
+      AND.push({
         OR: [
           { fullName: { contains: q } },
           { email: { contains: q } },
@@ -241,40 +213,17 @@ export class PrismaReservationRepository implements ReservationRepository {
       });
     }
 
-    // (2) Filtro por unidade (legado e unitId)
-    if (unit) {
-      and.push({ unit }); // legado (slug/nome)
-    }
-
+    // (2) Filtro por unidade
     if (unitId) {
-      try {
-        const unitRow = await prisma.unit.findUnique({
-          where: { id: String(unitId) },
-          select: { slug: true, name: true },
-        });
-
-        const orForLegacy: Prisma.ReservationWhereInput[] = [{ unitId }];
-
-        // ✅ Fallback seguro: só aceita por 'unit' quando unitId do registro é NULL
-        if (unitRow?.slug) {
-          orForLegacy.push({
-            AND: [{ unit: { equals: unitRow.slug } }, { unitId: null }],
-          });
-        }
-        if (unitRow?.name) {
-          orForLegacy.push({
-            AND: [{ unit: { equals: unitRow.name } }, { unitId: null }],
-          });
-        }
-
-        and.push({ OR: orForLegacy });
-      } catch {
-        and.push({ unitId });
-      }
+      // ✅ estrito por unitId quando informado
+      AND.push({ unitId });
+    } else if (unit) {
+      // ✅ legado (apenas se unitId NÃO veio)
+      AND.push({ unit });
     }
 
     // (3) Filtro por área
-    if (areaId) and.push({ areaId });
+    if (areaId) AND.push({ areaId });
 
     // (4) Intervalo de datas (to inclusivo)
     if (isValidDate(from) || isValidDate(to)) {
@@ -285,10 +234,10 @@ export class PrismaReservationRepository implements ReservationRepository {
         end.setHours(23, 59, 59, 999);
         range.lte = end;
       }
-      and.push({ reservationDate: range });
+      AND.push({ reservationDate: range });
     }
 
-    const where: Prisma.ReservationWhereInput = and.length ? { AND: and } : {};
+    const where: Prisma.ReservationWhereInput = AND.length ? { AND } : {};
 
     const [items, total] = await Promise.all([
       prisma.reservation.findMany({
