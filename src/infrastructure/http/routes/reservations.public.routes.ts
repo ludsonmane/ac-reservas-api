@@ -6,6 +6,8 @@ import utc from 'dayjs/plugin/utc';
 import { prisma } from '../../db/client';
 import { areasService } from '../../../modules/areas/areas.service';
 import { ReservationType } from '@prisma/client';
+// 🔒 middleware que barra reservas quando houver bloqueio operacional
+import { blockGuard } from '../../../interfaces/http/middlewares/blockGuard';
 
 const router = Router();
 dayjs.extend(utc);
@@ -156,8 +158,10 @@ router.get('/active', async (req, res) => {
 
 /* =============================================================================
    POST /v1/reservations/public
+   - Aplica blockGuard() para impedir criação quando houver bloqueio operacional.
+   - Mantém checagem defensiva inline (fallback) caso o middleware seja removido.
 ============================================================================= */
-router.post('/', async (req, res) => {
+router.post('/', blockGuard(), async (req, res) => {
   try {
     const {
       fullName,
@@ -266,10 +270,70 @@ router.post('/', async (req, res) => {
       });
     }
 
-    // capacidade por período
+    // ==============================
+    // 🔒 Checagem defensiva de BLOQUEIO (fallback ao middleware)
+    // ==============================
     const dt = new Date(reservationDate);
-    const { from, to } = periodWindow(dt);
+    const hhmm = `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+    const day = startOfDay(dt);
     const period = getPeriodFromDate(dt); // 'AFTERNOON' | 'NIGHT'
+
+    // HOTFIX compatibilidade: usa prisma.reservationBlock se existir,
+    // senão consulta via SQL direto com $queryRaw
+    type BlockRow = { mode: string; period: string | null; slots: any | null };
+    let blocks: BlockRow[] = [];
+
+    const prismaAny = prisma as any;
+    if (prismaAny.reservationBlock?.findMany) {
+      // client já tem o model (após prisma generate)
+      blocks = await prismaAny.reservationBlock.findMany({
+        where: { unitId: unit.id, date: day },
+        select: { mode: true, period: true, slots: true },
+      });
+    } else {
+      // client ainda não tem o model: tenta via SQL direto
+      try {
+        // ⚠️ Ajuste o nome da tabela se você mapeou diferente no schema
+        const rawRows = await prisma.$queryRaw<BlockRow[]>`
+          SELECT mode, period, slots
+          FROM ReservationBlock
+          WHERE unitId = ${unit.id} AND date = ${day}
+        `;
+        blocks = (rawRows ?? []).map((r) => ({
+          mode: String(r.mode || '').toUpperCase(),
+          period: r.period ? String(r.period).toUpperCase() : null,
+          // slots pode vir JSON/Texto; tenta parse
+          slots:
+            r.slots && typeof r.slots === 'string'
+              ? (() => { try { return JSON.parse(r.slots); } catch { return null; } })()
+              : r.slots ?? null,
+        }));
+      } catch {
+        blocks = [];
+      }
+    }
+
+    // compara por string; não dependemos dos enums gerados no client
+    const blockedAllDay = blocks.some((b) => b.mode === 'DAY');
+    const blockedPeriod = blocks.some(
+      (b) => b.mode === 'PERIOD' && b.period === period
+    );
+    const blockedSlot = blocks.some(
+      (b) => b.mode === 'SLOTS' && Array.isArray(b.slots) && b.slots.includes(hhmm)
+    );
+
+    if (blockedAllDay || blockedPeriod || blockedSlot) {
+      return res.status(409).json({
+        error: {
+          code: 'BLOCKED_BY_OPERATOR',
+          message: 'Reservas bloqueadas para este período pela administração.',
+        },
+      });
+    }
+    // ==============================
+
+    // capacidade por período
+    const { from, to } = periodWindow(dt);
 
     const maxPeriod =
       period === 'AFTERNOON'
@@ -459,7 +523,7 @@ router.get('/:id/meet-link', async (req, res) => {
     `Gerado automaticamente pelo site.`,
   ]
     .filter(Boolean)
-    .join('\\n');
+    .join('\n');
 
   const base = 'https://calendar.google.com/calendar/render?action=TEMPLATE';
   const params = new URLSearchParams();
