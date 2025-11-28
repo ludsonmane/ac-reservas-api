@@ -61,32 +61,53 @@ function buildServer() {
     const app = (0, express_1.default)();
     // Proxy (Railway / Nginx)
     app.set('trust proxy', 1);
-    /* ========= CORS (vem ANTES do helmet/rotas) ========= */
+    /* ========= CORS (vem ANTES de tudo) ========= */
     const rawCors = (process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '').trim();
     const origins = parseOriginsCSV(rawCors);
     if (origins.length === 0) {
+        // fallback dev
         origins.push('http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:4000');
     }
+    const isAllowed = (origin) => {
+        if (!origin)
+            return false;
+        const norm = normalizeOrigin(origin);
+        return origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === norm));
+    };
+    // 👉 UNIVERSAL: aplica headers CORS em TODAS as respostas (e resolve preflight)
+    app.use((req, res, next) => {
+        const origin = req.headers.origin;
+        if (origin && isAllowed(origin)) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+            res.setHeader('Vary', 'Origin, Access-Control-Request-Headers');
+            res.setHeader('Access-Control-Allow-Credentials', 'true');
+            res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+            const reqHeaders = req.headers['access-control-request-headers'] ||
+                'Content-Type, Authorization, X-Requested-With, X-Client-Version, X-CSRF-Token';
+            res.setHeader('Access-Control-Allow-Headers', reqHeaders);
+            res.setHeader('Access-Control-Max-Age', '600');
+        }
+        if (req.method === 'OPTIONS') {
+            return isAllowed(origin) ? res.sendStatus(204) : res.sendStatus(403);
+        }
+        next();
+    });
+    // (mantém cors() por compat — não atrapalha)
     const corsOptions = {
         origin(origin, cb) {
             if (!origin)
                 return cb(null, true); // curl/health
-            const norm = normalizeOrigin(origin);
-            const ok = origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === norm));
-            return ok ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
+            return isAllowed(origin) ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
         },
         methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         credentials: true,
         optionsSuccessStatus: 204,
-        // allowedHeaders undefined -> reflete Access-Control-Request-Headers
     };
     app.use((0, cors_1.default)(corsOptions));
-    // Express 5: pattern string '/(.*)' (nada de '*')
-    app.options('/(.*)', (0, cors_1.default)(corsOptions));
-    // Parsers
+    // ❌ REMOVIDO: app.options('/(.*)', ...) que quebrava no Express 5
+    /* ========= Parsers / infra ========= */
     app.use(express_1.default.json({ limit: '2mb' }));
     app.use(express_1.default.urlencoded({ extended: true }));
-    // Compressão
     app.use((0, compression_1.default)());
     // Helmet (depois do CORS para não conflitar)
     app.use((0, helmet_1.default)({
@@ -148,13 +169,14 @@ function buildServer() {
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         next();
     });
-    // Rotas públicas
+    /* ========= Rotas ========= */
+    // públicas
     app.use('/v1/reservations/public', reservations_public_routes_1.reservationsPublicRouter);
     app.use('/v1/areas/public', areas_public_routes_1.areasPublicRouter);
     app.use('/v1/units/public', units_public_routes_1.unitsPublicRouter);
-    // Auth
+    // auth
     app.use('/v1/auth', auth_routes_1.default);
-    // Rotas privadas/admin
+    // privadas/admin
     app.use('/v1/reservations', reservations_routes_1.reservationsRouter);
     app.use('/v1/reservations', reservations_guests_routes_1.default); // convidados
     app.use('/v1/areas', areas_routes_1.areasRouter);
