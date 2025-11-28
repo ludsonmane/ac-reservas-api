@@ -24,7 +24,6 @@ function at(d: Date, hh: number, mm: number, ss = 0, ms = 0) {
 }
 const EVENING_CUTOFF_MIN = 17 * 60 + 30; // 17:30
 
-// Retorna 'AFTERNOON' ou 'NIGHT'
 function getPeriodFromDate(dt: Date): 'AFTERNOON' | 'NIGHT' {
   const mins = dt.getHours() * 60 + dt.getMinutes();
   if (mins < 12 * 60) return 'AFTERNOON';
@@ -101,13 +100,11 @@ router.get('/availability', async (req, res, next) => {
 
 /* =============================================================================
    GET /v1/reservations/public/by-id/:id
-   -> usado pelo front para montar o boarding pass direto
 ============================================================================= */
 router.get('/by-id/:id', async (req, res) => {
   const { id } = req.params;
   const r = await prisma.reservation.findUnique({
     where: { id },
-    // Retorna tudo (inclui reservationType); ajuste o select se quiser enxugar
   });
   if (!r) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
   return res.json(r);
@@ -115,18 +112,14 @@ router.get('/by-id/:id', async (req, res) => {
 
 /* =============================================================================
    GET /v1/reservations/public/active
-   -> traz a reserva "em aberto" (AWAITING_CHECKIN / CONFIRMED / PENDING)
-      por id OU por email/phone
 ============================================================================= */
 router.get('/active', async (req, res) => {
   const id = (req.query.id as string | undefined)?.trim();
   const email = toLowerEmail(req.query.email as any);
   const phone = (req.query.phone as string | undefined)?.replace(/\D+/g, '');
 
-  // por id direto
   if (id) {
     const r = await prisma.reservation.findUnique({ where: { id } });
-    // só conta se estiver aguardando check-in
     if (!r || r.status !== 'AWAITING_CHECKIN') {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Nenhuma reserva ativa.' } });
     }
@@ -137,9 +130,7 @@ router.get('/active', async (req, res) => {
     return res.status(400).json({ error: { code: 'VALIDATION', message: 'Informe id ou email/phone.' } });
   }
 
-  const where: any = {
-    status: 'AWAITING_CHECKIN',
-  };
+  const where: any = { status: 'AWAITING_CHECKIN' };
   if (email) where.email = email;
   if (phone) where.phone = phone;
 
@@ -156,7 +147,7 @@ router.get('/active', async (req, res) => {
 
 /* =============================================================================
    POST /v1/reservations/public
-   - Cria reserva pública (sem blockGuard e sem checagem de bloqueios)
+   - Cria reserva pública (mantendo UTM via body ou querystring)
 ============================================================================= */
 router.post('/', async (req, res) => {
   try {
@@ -181,10 +172,26 @@ router.post('/', async (req, res) => {
       ref,
       source,
 
-      // 👇 novos aliases aceitos do front
+      // aliases aceitos
       reservationType,
       reservation_type,
     } = req.body || {};
+
+    // ------- Fallback UTM via query (?utm_*) --------
+    const q = req.query as Record<string, unknown>;
+    const pickUtm = (bodyVal: unknown, key: string) => {
+      const b = typeof bodyVal === 'string' ? bodyVal.trim() : '';
+      if (b) return b;
+      const vq = q?.[key];
+      const s = typeof vq === 'string' ? vq.trim() : '';
+      return s || null;
+    };
+    const utm_source_f   = pickUtm(utm_source, 'utm_source');
+    const utm_medium_f   = pickUtm(utm_medium, 'utm_medium');
+    const utm_campaign_f = pickUtm(utm_campaign, 'utm_campaign');
+    const utm_content_f  = pickUtm(utm_content, 'utm_content');
+    const utm_term_f     = pickUtm(utm_term, 'utm_term');
+    // -----------------------------------------------
 
     // validações básicas
     if (!fullName || String(fullName).trim().length < 3) {
@@ -208,10 +215,9 @@ router.post('/', async (req, res) => {
     // normalizações
     const emailNorm = toLowerEmail(email);
     const phoneNorm = phone ? String(phone).replace(/\D+/g, '') : null;
-    // tipo de reserva (enum seguro)
     const rType = parseReservationType(reservationType ?? reservation_type);
 
-    // 🔐 anti-duplicidade: se já tem reserva ativa para esse contato, bloqueia
+    // anti-duplicidade por contato
     if (emailNorm || phoneNorm) {
       const existing = await prisma.reservation.findFirst({
         where: {
@@ -330,11 +336,12 @@ router.post('/', async (req, res) => {
         areaId: area.id,
         areaName: area.name,
 
-        utm_source: utm_source ?? null,
-        utm_medium: utm_medium ?? null,
-        utm_campaign: utm_campaign ?? null,
-        utm_content: utm_content ?? null,
-        utm_term: utm_term ?? null,
+        // UTMs: body -> query (?utm_*)
+        utm_source: utm_source_f,
+        utm_medium: utm_medium_f,
+        utm_campaign: utm_campaign_f,
+        utm_content: utm_content_f,
+        utm_term: utm_term_f,
         url: url ?? null,
         ref: ref ?? null,
 
@@ -358,7 +365,7 @@ router.post('/', async (req, res) => {
 });
 
 /* =============================================================================
-   NOVO: POST /v1/reservations/public/:id/guests/bulk
+   POST /v1/reservations/public/:id/guests/bulk
 ============================================================================= */
 router.post('/:id/guests/bulk', async (req, res) => {
   const reservationId = String(req.params.id || '').trim();
@@ -379,7 +386,6 @@ router.post('/:id/guests/bulk', async (req, res) => {
     return res.status(400).json({ error: parsed.error.flatten() });
   }
 
-  // garante que a reserva existe
   const exists = await prisma.reservation.findUnique({
     where: { id: reservationId },
     select: { id: true },
@@ -390,7 +396,7 @@ router.post('/:id/guests/bulk', async (req, res) => {
     reservationId,
     name: g.name.trim(),
     email: g.email.trim().toLowerCase(),
-    role: g.role, // 'GUEST' | 'HOST'
+    role: g.role,
   }));
 
   try {
@@ -411,7 +417,7 @@ router.post('/:id/guests/bulk', async (req, res) => {
 });
 
 /* =============================================================================
-   NOVO: GET /v1/reservations/public/:id/meet-link
+   GET /v1/reservations/public/:id/meet-link
 ============================================================================= */
 router.get('/:id/meet-link', async (req, res) => {
   const reservationId = String(req.params.id || '').trim();
@@ -431,7 +437,6 @@ router.get('/:id/meet-link', async (req, res) => {
   });
   if (!r) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
 
-  // pega e-mails dos convidados + titular (se tiver email)
   const guests = await prisma.guest.findMany({
     where: { reservationId },
     select: { email: true },
@@ -442,10 +447,9 @@ router.get('/:id/meet-link', async (req, res) => {
     ...guests.map((g) => toLowerEmail(g.email)).filter(Boolean),
   ].filter(Boolean) as string[];
 
-  // monta URL do Google Calendar
   const start = dayjs(r.reservationDate);
-  const end = start.add(2, 'hour'); // duração padrão 2h
-  const fmt = (d: dayjs.Dayjs) => d.utc().format('YYYYMMDD[T]HHmmss[Z]'); // formato aceito pelo Calendar
+  const end = start.add(2, 'hour');
+  const fmt = (d: dayjs.Dayjs) => d.utc().format('YYYYMMDD[T]HHmmss[Z]');
 
   const text = `RESERVA DO ${r.fullName?.toUpperCase?.() || 'CLIENTE'} NO MANÉ MERCADO`;
   const details = [
