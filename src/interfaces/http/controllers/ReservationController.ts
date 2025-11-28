@@ -1,4 +1,4 @@
-// api/src/interfaces/http/controllers/ReservationController.ts
+// src/interfaces/http/controllers/ReservationController.ts
 import type { Request, Response } from 'express';
 import { CreateReservation } from '../../../application/use-cases/CreateReservation';
 import { ListReservations } from '../../../application/use-cases/ListReservations';
@@ -11,7 +11,7 @@ import { sendReservationTicket } from '../../../services/email/sendReservationTi
 import { z } from 'zod';
 import { prisma } from '../../../infrastructure/db/prisma';
 
-/* ============== Helpers básicos ============== */
+/* ===== Helpers ===== */
 function toInt(v: unknown, fb: number): number {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : fb;
@@ -41,7 +41,7 @@ const asStr = (v: unknown): string | undefined => {
   return s ? s : undefined;
 };
 
-/* ============== Helpers para UTM ============== */
+/* ===== UTM helpers (sem nada de blocks) ===== */
 const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'gclid', 'fbclid'] as const;
 type UtmKey = typeof UTM_KEYS[number];
 
@@ -58,7 +58,6 @@ function parseCookieHeader(header?: string): Record<string, string> {
   });
   return out;
 }
-
 function pickUtm(obj: any): Partial<Record<UtmKey, string>> {
   const bag: Partial<Record<UtmKey, string>> = {};
   UTM_KEYS.forEach((k) => {
@@ -67,26 +66,17 @@ function pickUtm(obj: any): Partial<Record<UtmKey, string>> {
   });
   return bag;
 }
-
 function extractUtmFromRequest(req: Request) {
-  // 1) body explícito
   const fromBody = pickUtm((req as any).body);
-
-  // 2) query string (?utm_*)
   const fromQuery = pickUtm((req as any).query);
-
-  // 3) cookies (se tiver cookie-parser, usa req.cookies; senão, parse do header)
   const cookiesObj =
     (req as any).cookies && typeof (req as any).cookies === 'object'
       ? (req as any).cookies
       : parseCookieHeader(req.headers?.cookie);
-
   const fromCookies = pickUtm(cookiesObj);
-
-  // Prioridade: body > query > cookie
+  // prioridade: body > query > cookies
   const utm: Partial<Record<UtmKey, string>> = { ...fromCookies, ...fromQuery, ...fromBody };
 
-  // URL e referrer para auditoria
   const absoluteUrl = `${(req as any).protocol || 'http'}://${(req as any).get?.('host') || req.headers.host}${(req as any).originalUrl || (req as any).url || ''}`;
   const referrer = (req as any).get?.('referer') || req.headers['referer'] || undefined;
 
@@ -104,7 +94,7 @@ export class ReservationController {
 
   /* ================== POST /v1/reservations ================== */
   create = async (req: Request, res: Response) => {
-    // Captura UTM de body → query → cookies (e URL/referrer para auditoria)
+    // Coleta UTM (sem blocks)
     const { utm, absoluteUrl, referrer } = extractUtmFromRequest(req);
 
     const parsed = CreateReservationDTO.safeParse(req.body);
@@ -131,14 +121,14 @@ export class ReservationController {
       phone: nonEmptyOrNull(b.phone ?? b.contactPhone),
       notes: nonEmptyOrNull(b.notes),
 
-      // ✅ UTMs: body tem prioridade; fallback para query/cookies
+      // UTMs: body tem prioridade; fallback para query/cookies
       utm_source: nonEmptyOrNull(b.utm_source) ?? nonEmptyOrNull(utm.utm_source),
       utm_medium: nonEmptyOrNull(b.utm_medium) ?? nonEmptyOrNull(utm.utm_medium),
       utm_campaign: nonEmptyOrNull(b.utm_campaign) ?? nonEmptyOrNull(utm.utm_campaign),
       utm_content: nonEmptyOrNull(b.utm_content) ?? nonEmptyOrNull(utm.utm_content),
       utm_term: nonEmptyOrNull(b.utm_term) ?? nonEmptyOrNull(utm.utm_term),
 
-      // Informações de contexto úteis para tracking/auditoria
+      // contexto (auditoria)
       url: nonEmptyOrNull(b.url) ?? nonEmptyOrNull(absoluteUrl),
       ref: nonEmptyOrNull(b.ref) ?? nonEmptyOrNull(String(referrer || '')),
 
@@ -168,7 +158,6 @@ export class ReservationController {
           email: c.email,
           phone: c.phone ?? undefined,
           people: c.people,
-          // mantém compat: se você denormalizar "unitName" depois, pode trocar aqui
           unit: c.unit ?? 'Mané Mercado',
           table: c.table ?? undefined,
           reservationDate: reservationDateIso,
@@ -190,16 +179,13 @@ export class ReservationController {
     const page = Math.max(parseInt(String(req.query.page ?? '1'), 10), 1);
     const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize ?? '20'), 10), 1), 100);
 
-    // aliases para search
     const search =
       asStr(req.query.search) ??
       asStr(req.query.q) ??
       asStr(req.query.query) ??
       '';
 
-    // unidade: legado e variações
     const unit   = asStr(req.query.unit) ?? asStr(req.query.unitSlug) ?? asStr(req.query.unit_slug);
-    // ids: aceitam camelCase e snake_case
     const unitId = asId(req.query.unitId) ?? asId(req.query.unit_id);
     const areaId = asId(req.query.areaId) ?? asId(req.query.area_id);
 
@@ -235,7 +221,6 @@ export class ReservationController {
     const b = parsed.data as Record<string, any>;
     const payload: Record<string, any> = { ...b };
 
-    // normalizações iguais às do create, quando o campo vier no body
     if (b.kids !== undefined) payload.kids = Math.max(0, toInt(b.kids, 0));
     if (b.people !== undefined) payload.people = Math.max(1, toInt(b.people, 1));
 
@@ -252,11 +237,9 @@ export class ReservationController {
     if (b.utm_content !== undefined) payload.utm_content = nonEmptyOrNull(b.utm_content);
     if (b.utm_term !== undefined) payload.utm_term = nonEmptyOrNull(b.utm_term);
 
-    // LEGADO (strings livres)
     if (b.unit !== undefined) payload.unit = nonEmptyOrNull(b.unit);
     if (b.area !== undefined) payload.area = nonEmptyOrNull(b.area);
 
-    // NOVOS (IDs relacionais)
     if (b.unitId !== undefined) payload.unitId = nonEmptyOrNull(b.unitId);
     if (b.areaId !== undefined) payload.areaId = nonEmptyOrNull(b.areaId);
 
@@ -270,12 +253,11 @@ export class ReservationController {
     return res.sendStatus(204);
   };
 
-  /* ========== NOVO: POST /v1/reservations/:id/guests/bulk ========== */
+  /* ========== POST /v1/reservations/:id/guests/bulk ========== */
   addGuestsBulk = async (req: Request, res: Response) => {
     const reservationId = String(req.params.id || '').trim();
     if (!reservationId) return res.status(400).json({ error: 'Missing reservation id' });
 
-    // validação de entrada com zod
     const Email = z.string().trim().toLowerCase().email();
     const GuestSchema = z.object({
       name: z.string().trim().min(2, 'name too short').max(200),
@@ -292,22 +274,19 @@ export class ReservationController {
     }
 
     try {
-      // garante que a reserva existe
       const exists = await prisma.reservation.findUnique({
         where: { id: reservationId },
         select: { id: true },
       });
       if (!exists) return res.status(404).json({ error: 'RESERVATION_NOT_FOUND' });
 
-      // normaliza payload
       const data = parsed.data.guests.map((g) => ({
         reservationId,
         name: g.name.trim(),
         email: g.email.trim().toLowerCase(),
-        role: g.role, // 'GUEST' | 'HOST'
+        role: g.role,
       }));
 
-      // inserção em massa com proteção de duplicados por (reservationId, email)
       const result = await prisma.guest.createMany({
         data,
         skipDuplicates: true,
@@ -318,7 +297,6 @@ export class ReservationController {
 
       return res.status(200).json({ created, skipped });
     } catch (err: any) {
-      // trata erro de índice único ou outros
       if (err?.code === 'P2003') {
         return res.status(400).json({ error: 'FOREIGN_KEY_CONSTRAINT' });
       }
