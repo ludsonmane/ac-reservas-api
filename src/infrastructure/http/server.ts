@@ -53,6 +53,31 @@ function parseOriginsCSV(value?: string): (string | RegExp)[] {
 export function buildServer() {
   const app = express();
 
+  // DEBUG CORS — loga cada OPTIONS/POST e mostra por rota se aplicou header
+  app.use((req, res, next) => {
+    if (req.method === 'OPTIONS' || req.path.startsWith('/v1/auth')) {
+      console.log('[CORSDBG] in:', req.method, req.path, 'Origin=', req.headers.origin, 'ACRH=', req.headers['access-control-request-headers']);
+    }
+    const setHeader = res.setHeader.bind(res);
+    res.setHeader = (name: any, value: any) => {
+      if (String(name).toLowerCase() === 'access-control-allow-origin') {
+        console.log('[CORSDBG] out:', req.method, req.path, 'ACAO=', value);
+      }
+      return setHeader(name, value);
+    };
+    next();
+  });
+
+  // endpoint de verificação rápida
+  app.get('/__debug/cors', (req, res) => {
+    res.json({
+      origin: req.headers.origin || null,
+      cors_origin_env: process.env.CORS_ORIGIN || null,
+      cors_origins_env: process.env.CORS_ORIGINS || null,
+      note: 'Este endpoint deve responder com Access-Control-Allow-Origin quando chamado do admin.'
+    });
+  });
+
   // Proxy (Railway / Nginx)
   app.set('trust proxy', 1);
 
