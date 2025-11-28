@@ -6,17 +6,16 @@ const app = express();
 
 app.use(helmet());
 
-/** Whitelist de origens permitidas */
+// --- Whitelist ---
 const RAW_ORIGINS = [
   'https://reservas.mane.com.vc',
   'https://mane.com.vc',
   'https://admin.mane.com.vc',
   'http://localhost:3000',
-  'http://localhost:5173',   // sem "/" no final
-  'http://127.0.0.1:4000',   // com esquema http://
+  'http://localhost:5173',
+  'http://127.0.0.1:4000',
 ] as const;
 
-/** Normaliza para comparação (remove barra final, preserva porta) */
 function normalizeOrigin(origin?: string | null) {
   if (!origin) return '';
   try {
@@ -27,37 +26,39 @@ function normalizeOrigin(origin?: string | null) {
     return origin.trim().replace(/\/+$/, '');
   }
 }
-
-const ALLOWED_ORIGINS = new Set(RAW_ORIGINS.map(normalizeOrigin));
+const ALLOWED = new Set(RAW_ORIGINS.map(normalizeOrigin));
 
 const corsOptions: cors.CorsOptions = {
   origin(origin, cb) {
-    // Requests sem Origin (curl/healthcheck) -> libera
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true); // curl/healthchecks
     const norm = normalizeOrigin(origin);
-    if (ALLOWED_ORIGINS.has(norm)) return cb(null, true);
+    if (ALLOWED.has(norm)) return cb(null, true);
     return cb(new Error(`Not allowed by CORS: ${origin}`));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',
-    'X-Client-Version',
-    'X-CSRF-Token',
-  ],
+  // Deixe undefined para refletir automaticamente o Access-Control-Request-Headers
+  allowedHeaders: undefined,
   exposedHeaders: ['Content-Length', 'Content-Range'],
-  credentials: true,   // true se usar cookies/sessão cross-site
-  maxAge: 600,         // cache do preflight (10 min)
+  credentials: true,         // true se usa cookies/sessão cross-site
+  maxAge: 600,               // cache do preflight
+  optionsSuccessStatus: 204, // status do preflight
 };
 
+// 1) Aplica CORS global
 app.use(cors(corsOptions));
-// Express 5: use /(.*) no lugar de '*'
-app.options('/(.*)', cors(corsOptions));
 
+// 2) Intercepta QUALQUER OPTIONS (Express 5: sem '*')
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return cors(corsOptions)(req, res, () => res.sendStatus(204));
+  }
+  next();
+});
+
+// body parser depois do CORS
 app.use(express.json());
 
-// ... suas rotas
+// suas rotas…
 // app.use('/v1', routes);
 
 export default app;
