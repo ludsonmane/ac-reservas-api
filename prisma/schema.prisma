@@ -34,6 +34,22 @@ enum ReservationType {
 }
 
 /**
+ * 🔒 Bloqueios operacionais
+ * - ReservationBlockMode: PERIOD (tarde/noite/dia todo) ou SLOTS (horários específicos)
+ * - ReservationBlockPeriod: períodos possíveis
+ */
+enum ReservationBlockMode {
+  PERIOD
+  SLOTS
+}
+
+enum ReservationBlockPeriod {
+  AFTERNOON
+  NIGHT
+  ALL_DAY
+}
+
+/**
  * ===== Models =====
  */
 
@@ -61,25 +77,27 @@ model Unit {
 
   reservations Reservation[]
   areas        Area[]
+  blocks       ReservationBlock[]
 
   @@index([name])
   @@index([isActive])
 }
 
 model Area {
-  id       String @id @default(uuid()) @db.VarChar(36)
-  unitId   String @db.VarChar(36)
-  unit     Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  id       String  @id @default(uuid()) @db.VarChar(36)
+  unitId   String  @db.VarChar(36)
+  unit     Unit    @relation(fields: [unitId], references: [id], onDelete: Cascade)
   name     String  @db.VarChar(191)
   photoUrl String?
   isActive Boolean @default(true)
 
-  iconEmoji        String? @db.VarChar(16) // ex.: "🍺", "🎸", "🪑"
-  description      String? @db.Text
-  capacityAfternoon Int?
-  capacityNight     Int?
+  iconEmoji          String? @db.VarChar(16) // ex.: "🍺", "🎸", "🪑"
+  description        String? @db.Text
+  capacityAfternoon  Int?
+  capacityNight      Int?
 
   reservations Reservation[]
+  blocks       ReservationBlock[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -90,11 +108,11 @@ model Area {
 }
 
 model Reservation {
-  id              String  @id @default(uuid()) @db.VarChar(36)
-  reservationCode String? @unique @db.VarChar(6)
+  id              String          @id @default(uuid()) @db.VarChar(36)
+  reservationCode String?         @unique @db.VarChar(6)
   reservationType ReservationType @default(PARTICULAR)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
   fullName String  @db.VarChar(200)
   cpf      String? @db.VarChar(14)
@@ -156,11 +174,10 @@ model Reservation {
   @@index([areaId, createdAt])
 }
 
-
 model Guest {
-  id            String       @id @default(uuid()) @db.VarChar(36)
-  reservationId String       @db.VarChar(36)
-  reservation   Reservation  @relation(fields: [reservationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  id            String      @id @default(uuid()) @db.VarChar(36)
+  reservationId String      @db.VarChar(36)
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   name  String    @db.VarChar(200)
   email String    @db.VarChar(200)
@@ -172,6 +189,37 @@ model Guest {
   @@unique([reservationId, email], map: "guest_reservation_email_unique")
   @@index([reservationId], map: "guest_reservation_idx")
   @@index([email], map: "guest_email_idx")
-
   @@map("guest")
+}
+
+/**
+ * 🔒 Bloqueio operacional de reservas por unidade/área/dia/período/horário
+ * - areaId = NULL  => bloqueia a unidade inteira
+ * - mode = PERIOD  => use "period" (AFTERNOON/NIGHT/ALL_DAY)
+ * - mode = SLOTS   => use "slots" (Json com ["12:00","12:30",...])
+ * Observação: MySQL não tem array escalar, por isso usamos Json para slots.
+ */
+model ReservationBlock {
+  id        String                 @id @default(uuid()) @db.VarChar(36)
+
+  unitId    String                 @db.VarChar(36)
+  unit      Unit                   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  areaId    String?                @db.VarChar(36)
+  area      Area?                  @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  date      DateTime               // normalizado para 00:00:00 do dia (America/Sao_Paulo)
+
+  mode      ReservationBlockMode
+  period    ReservationBlockPeriod? // requerido quando mode = PERIOD
+  slots     Json?                  // requerido quando mode = SLOTS; ex.: ["12:00","12:30","18:00"]
+
+  reason    String?                @db.VarChar(255)
+  createdBy String?                @db.VarChar(64)
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+
+  @@unique([unitId, areaId, date, mode, period], map: "uniq_block_scope")
+  @@index([unitId, date])
+  @@index([unitId, areaId, date])
 }

@@ -19,6 +19,7 @@
     "// CI/Buildpack compat (Railway)": "--------------------------------------",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
+    "test:mail": "tsx src/scripts/test-sg.ts",
     "// build/start (prod)": "------------------------------------------------",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",

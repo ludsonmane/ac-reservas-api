@@ -10,6 +10,7 @@ import fs from 'fs';
 
 import swaggerUi from 'swagger-ui-express';
 import { logger } from '../../config/logger';
+import { unitsPublicRouter } from './routes/units.public.routes';
 import { notFound } from './middlewares/notFound';
 import { errorHandler } from './middlewares/errorHandler';
 
