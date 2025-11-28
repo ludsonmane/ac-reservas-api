@@ -3,11 +3,6 @@ import 'dotenv/config'; // garante variáveis carregadas cedo
 import { env } from './config/env';
 import { logger } from './config/logger';
 import express from 'express';
-
-// Se você já tem um builder com middlewares, importe e use.
-// Caso não exista, inicializamos aqui mesmo.
-import { AdminBlocksController } from './interfaces/http/controllers/AdminBlocksController';
-
 const app = express();
 
 // middlewares básicos (caso já tenha em outro lugar, pode remover estes)
@@ -18,9 +13,6 @@ app.use(express.urlencoded({ extended: true }));
 // exemplo (se você tiver um registrador central):
 // import { mountAllRoutes } from './infrastructure/http/mountAllRoutes';
 // mountAllRoutes(app);
-
-// ===== NOVO: rotas de bloqueios admin =====
-AdminBlocksController.mount(app);
 
 // ------- healthcheck (opcional) -------
 app.get('/health', (_req, res) => res.json({ ok: true }));
