@@ -13,49 +13,40 @@ const RAW_ORIGINS = [
   'https://admin.mane.com.vc',
   'http://localhost:3000',
   'http://localhost:5173',
-  'http://127.0.0.1:4000',
+  'http://api.mane.com.vc',
 ] as const;
 
-function normalizeOrigin(origin?: string | null) {
+function normalize(origin?: string | null) {
   if (!origin) return '';
-  try {
-    const u = new URL(origin);
-    const port = u.port ? `:${u.port}` : '';
-    return `${u.protocol}//${u.hostname}${port}`;
-  } catch {
-    return origin.trim().replace(/\/+$/, '');
-  }
+  try { const u = new URL(origin); return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`; }
+  catch { return String(origin).trim().replace(/\/+$/, ''); }
 }
-const ALLOWED = new Set(RAW_ORIGINS.map(normalizeOrigin));
+const ALLOWED = new Set(
+  (process.env.CORS_ORIGINS || 'https://admin.mane.com.vc,https://reservas.mane.com.vc,https://mane.com.vc,http://localhost:3000,http://localhost:5173,http://127.0.0.1:4000')
+    .split(',').map(s => normalize(s.trim())).filter(Boolean)
+);
+const CREDENTIALS = String(process.env.CORS_CREDENTIALS ?? 'true').toLowerCase() === 'true';
 
-const corsOptions: cors.CorsOptions = {
-  origin(origin, cb) {
-    if (!origin) return cb(null, true); // curl/healthchecks
-    const norm = normalizeOrigin(origin);
-    if (ALLOWED.has(norm)) return cb(null, true);
-    return cb(new Error(`Not allowed by CORS: ${origin}`));
-  },
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  // Deixe undefined para refletir automaticamente o Access-Control-Request-Headers
-  allowedHeaders: undefined,
-  exposedHeaders: ['Content-Length', 'Content-Range'],
-  credentials: true,         // true se usa cookies/sessão cross-site
-  maxAge: 600,               // cache do preflight
-  optionsSuccessStatus: 204, // status do preflight
-};
-
-// 1) Aplica CORS global
-app.use(cors(corsOptions));
-
-// 2) Intercepta QUALQUER OPTIONS (Express 5: sem '*')
 app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    return cors(corsOptions)(req, res, () => res.sendStatus(204));
+  const origin = req.headers.origin as string | undefined;
+  const norm = normalize(origin);
+  const allowed = !origin || ALLOWED.has(norm);
+
+  if (allowed) {
+    if (origin) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); }
+    else { res.setHeader('Access-Control-Allow-Origin', '*'); } // curl/healthcheck
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    const reqHeaders = req.headers['access-control-request-headers'] as string | undefined;
+    res.setHeader('Access-Control-Allow-Headers', reqHeaders || 'Content-Type, Authorization, X-Requested-With, X-Client-Version, X-CSRF-Token');
+    if (CREDENTIALS && origin) res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '600');
   }
+  if (req.method === 'OPTIONS') return allowed ? res.sendStatus(204) : res.sendStatus(403);
   next();
 });
 
-// body parser depois do CORS
+// depois disso:
+app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(express.json());
 
 // suas rotas…
