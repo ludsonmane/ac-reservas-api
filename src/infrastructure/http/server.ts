@@ -20,11 +20,21 @@ import { reservationsPublicRouter } from './routes/reservations.public.routes';
 import { unitsRouter } from './routes/units.routes';
 import { areasRouter } from './routes/areas.routes';
 import { areasPublicRouter } from './routes/areas.public.routes';
-import { unitsPublicRouter } from './routes/units.public.routes';
 import areasUploadRouter from './routes/areas.upload.routes';
 import { usersRouter } from './routes/users.routes';
 // ✅ convidados
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
+
+/* ========= Helpers de CORS ========= */
+function normalizeOrigin(origin?: string | null) {
+  if (!origin) return '';
+  try {
+    const u = new URL(origin);
+    return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
+  } catch {
+    return String(origin).trim().replace(/\/+$/, '');
+  }
+}
 
 function parseOrigins(value?: string): (string | RegExp)[] {
   if (!value) return [];
@@ -34,9 +44,9 @@ function parseOrigins(value?: string): (string | RegExp)[] {
     .filter(Boolean)
     .map((v) => {
       if (v.startsWith('/') && v.endsWith('/')) {
-        try { return new RegExp(v.slice(1, -1)); } catch { }
+        try { return new RegExp(v.slice(1, -1)); } catch { /* ignora regex inválida */ }
       }
-      return v;
+      return normalizeOrigin(v);
     });
 }
 
@@ -46,6 +56,39 @@ export function buildServer() {
   // Proxy (Railway / Nginx)
   app.set('trust proxy', 1);
 
+  /* ========= CORS (vem ANTES do helmet/rotas) ========= */
+  // Aceita CORS_ORIGIN ou CORS_ORIGINS (CSV)
+  const rawCors = (process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '').trim();
+  const origins = parseOrigins(rawCors);
+  if (origins.length === 0) {
+    // fallback dev
+    origins.push(
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://127.0.0.1:4000'
+    );
+  }
+
+  const corsOptions: CorsOptions = {
+    origin(origin, cb) {
+      // requests sem Origin (curl/healthcheck) -> libera
+      if (!origin) return cb(null, true);
+      const norm = normalizeOrigin(origin);
+      const ok = origins.some((o) =>
+        o instanceof RegExp ? o.test(origin) : o === norm
+      );
+      return ok ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    credentials: true,           // necessário se usar cookies/sessão cross-site
+    optionsSuccessStatus: 204,   // 204 no preflight
+    // allowedHeaders indefinido -> o pacote reflete o Access-Control-Request-Headers
+  };
+
+  app.use(cors(corsOptions));
+  // Express 5: use string pattern /(.*) (não use '*')
+  app.options('/(.*)', cors(corsOptions));
+
   // Parsers
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true }));
@@ -53,7 +96,7 @@ export function buildServer() {
   // Compressão
   app.use(compression());
 
-  // Helmet
+  // Helmet (depois do CORS para não conflitar)
   app.use(
     helmet({
       contentSecurityPolicy: false,
@@ -61,30 +104,12 @@ export function buildServer() {
       crossOriginEmbedderPolicy: false,
       frameguard: { action: 'deny' },
       referrerPolicy: { policy: 'no-referrer' },
-      hsts: process.env.NODE_ENV === 'production'
-        ? { maxAge: 60 * 60 * 24 * 180, includeSubDomains: true, preload: true }
-        : false,
+      hsts:
+        process.env.NODE_ENV === 'production'
+          ? { maxAge: 60 * 60 * 24 * 180, includeSubDomains: true, preload: true }
+          : false,
     })
   );
-
-  // CORS
-  const origins = parseOrigins(process.env.CORS_ORIGIN);
-  if (origins.length === 0) {
-    origins.push('http://localhost:3000', 'http://localhost:5173');
-  }
-  const corsOptions: CorsOptions = {
-    origin(origin, cb) {
-      if (!origin) return cb(null, true);
-      const ok = origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin));
-      return ok ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
-    },
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    credentials: true,
-    optionsSuccessStatus: 204,
-  };
-  app.use(cors(corsOptions));
-  app.options(/.*/, cors(corsOptions) as any);
-
 
   // Use env UPLOADS_DIR para casar com Multer/NGINX. Fallback: ./uploads
   const UPLOADS_DIR = process.env.UPLOADS_DIR
@@ -113,7 +138,7 @@ export function buildServer() {
   }
 
   // cabeçalhos de mídia antes do static
-  app.use('/uploads', (req, res, next) => {
+  app.use('/uploads', (_req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     next();
@@ -182,7 +207,6 @@ export function buildServer() {
     }
   });
 
-
   // Rotas públicas
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
@@ -208,8 +232,6 @@ export function buildServer() {
     logger.warn({ e }, 'openapi.json not found, serving minimal doc');
   }
   app.use('/v1/docs', swaggerUi.serve, swaggerUi.setup(openapiDoc));
-
-
 
   // 404 + erros
   app.use(notFound);
