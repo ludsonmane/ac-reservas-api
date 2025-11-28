@@ -11,7 +11,7 @@ import { sendReservationTicket } from '../../../services/email/sendReservationTi
 import { z } from 'zod';
 import { prisma } from '../../../infrastructure/db/prisma';
 
-/* ===== Helpers ===== */
+/* ============== Helpers básicos ============== */
 function toInt(v: unknown, fb: number): number {
   const n = Number(v);
   return Number.isFinite(n) ? Math.trunc(n) : fb;
@@ -41,6 +41,58 @@ const asStr = (v: unknown): string | undefined => {
   return s ? s : undefined;
 };
 
+/* ============== Helpers para UTM ============== */
+const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'gclid', 'fbclid'] as const;
+type UtmKey = typeof UTM_KEYS[number];
+
+function parseCookieHeader(header?: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  header.split(';').forEach((p) => {
+    const i = p.indexOf('=');
+    if (i > -1) {
+      const k = decodeURIComponent(p.slice(0, i).trim());
+      const v = decodeURIComponent(p.slice(i + 1).trim());
+      out[k] = v;
+    }
+  });
+  return out;
+}
+
+function pickUtm(obj: any): Partial<Record<UtmKey, string>> {
+  const bag: Partial<Record<UtmKey, string>> = {};
+  UTM_KEYS.forEach((k) => {
+    const v = obj?.[k];
+    if (typeof v === 'string' && v.trim()) bag[k] = v.trim();
+  });
+  return bag;
+}
+
+function extractUtmFromRequest(req: Request) {
+  // 1) body explícito
+  const fromBody = pickUtm((req as any).body);
+
+  // 2) query string (?utm_*)
+  const fromQuery = pickUtm((req as any).query);
+
+  // 3) cookies (se tiver cookie-parser, usa req.cookies; senão, parse do header)
+  const cookiesObj =
+    (req as any).cookies && typeof (req as any).cookies === 'object'
+      ? (req as any).cookies
+      : parseCookieHeader(req.headers?.cookie);
+
+  const fromCookies = pickUtm(cookiesObj);
+
+  // Prioridade: body > query > cookie
+  const utm: Partial<Record<UtmKey, string>> = { ...fromCookies, ...fromQuery, ...fromBody };
+
+  // URL e referrer para auditoria
+  const absoluteUrl = `${(req as any).protocol || 'http'}://${(req as any).get?.('host') || req.headers.host}${(req as any).originalUrl || (req as any).url || ''}`;
+  const referrer = (req as any).get?.('referer') || req.headers['referer'] || undefined;
+
+  return { utm, absoluteUrl, referrer };
+}
+
 export class ReservationController {
   constructor(
     private createUC: CreateReservation,
@@ -52,6 +104,9 @@ export class ReservationController {
 
   /* ================== POST /v1/reservations ================== */
   create = async (req: Request, res: Response) => {
+    // Captura UTM de body → query → cookies (e URL/referrer para auditoria)
+    const { utm, absoluteUrl, referrer } = extractUtmFromRequest(req);
+
     const parsed = CreateReservationDTO.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -76,14 +131,16 @@ export class ReservationController {
       phone: nonEmptyOrNull(b.phone ?? b.contactPhone),
       notes: nonEmptyOrNull(b.notes),
 
-      utm_source: nonEmptyOrNull(b.utm_source),
-      utm_medium: nonEmptyOrNull(b.utm_medium),
-      utm_campaign: nonEmptyOrNull(b.utm_campaign),
-      utm_content: nonEmptyOrNull(b.utm_content),
-      utm_term: nonEmptyOrNull(b.utm_term),
+      // ✅ UTMs: body tem prioridade; fallback para query/cookies
+      utm_source: nonEmptyOrNull(b.utm_source) ?? nonEmptyOrNull(utm.utm_source),
+      utm_medium: nonEmptyOrNull(b.utm_medium) ?? nonEmptyOrNull(utm.utm_medium),
+      utm_campaign: nonEmptyOrNull(b.utm_campaign) ?? nonEmptyOrNull(utm.utm_campaign),
+      utm_content: nonEmptyOrNull(b.utm_content) ?? nonEmptyOrNull(utm.utm_content),
+      utm_term: nonEmptyOrNull(b.utm_term) ?? nonEmptyOrNull(utm.utm_term),
 
-      url: nonEmptyOrNull(b.url),
-      ref: nonEmptyOrNull(b.ref),
+      // Informações de contexto úteis para tracking/auditoria
+      url: nonEmptyOrNull(b.url) ?? nonEmptyOrNull(absoluteUrl),
+      ref: nonEmptyOrNull(b.ref) ?? nonEmptyOrNull(String(referrer || '')),
 
       // LEGADO (nome/slug da unidade) — ainda aceito
       unit: nonEmptyOrNull(b.unit),
