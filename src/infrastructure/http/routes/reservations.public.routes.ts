@@ -69,13 +69,44 @@ const toLowerEmail = (v?: string | null) =>
 
 /** Normaliza o reservationType vindo do front (string livre) p/ enum do Prisma */
 function parseReservationType(raw: unknown): ReservationType {
-  const v = String(raw ?? '').trim().toUpperCase();
-  const allowed = new Set<ReservationType>([
-    'PARTICULAR',
-    'CONFRATERNIZACAO',
-    'EMPRESA',
-  ] as ReservationType[]);
-  return allowed.has(v as ReservationType) ? (v as ReservationType) : 'PARTICULAR';
+  // normaliza: maiúsculas + remove acentos/diacríticos
+  const s = String(raw ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+
+  // aceita os 4 valores do enum e aliases comuns
+  const map: Record<string, ReservationType> = {
+    // Aniversário
+    ANIVERSARIO: 'ANIVERSARIO',
+    ANIVERSARIO_: 'ANIVERSARIO',
+    NIVER: 'ANIVERSARIO',
+    BIRTHDAY: 'ANIVERSARIO',
+
+    // Particular
+    PARTICULAR: 'PARTICULAR',
+    PESSOAL: 'PARTICULAR',
+    PRIVADO: 'PARTICULAR',
+
+    // Confraternização
+    CONFRATERNIZACAO: 'CONFRATERNIZACAO',
+    CONFRAT: 'CONFRATERNIZACAO',
+
+    // Empresa
+    EMPRESA: 'EMPRESA',
+    CORPORATIVO: 'EMPRESA',
+    CORPORATE: 'EMPRESA',
+  };
+
+  const hit = map[s];
+  if (hit) return hit;
+
+  // Log útil p/ depuração (remover depois)
+  console.warn('[reservationType inválido]', raw, '->', s, '(fallback=PARTICULAR)');
+
+  // último recurso: mantém comportamento antigo (fallback)
+  return 'PARTICULAR';
 }
 
 /* =============================================================================
@@ -186,11 +217,11 @@ router.post('/', async (req, res) => {
       const s = typeof vq === 'string' ? vq.trim() : '';
       return s || null;
     };
-    const utm_source_f   = pickUtm(utm_source, 'utm_source');
-    const utm_medium_f   = pickUtm(utm_medium, 'utm_medium');
+    const utm_source_f = pickUtm(utm_source, 'utm_source');
+    const utm_medium_f = pickUtm(utm_medium, 'utm_medium');
     const utm_campaign_f = pickUtm(utm_campaign, 'utm_campaign');
-    const utm_content_f  = pickUtm(utm_content, 'utm_content');
-    const utm_term_f     = pickUtm(utm_term, 'utm_term');
+    const utm_content_f = pickUtm(utm_content, 'utm_content');
+    const utm_term_f = pickUtm(utm_term, 'utm_term');
     // -----------------------------------------------
 
     // validações básicas
