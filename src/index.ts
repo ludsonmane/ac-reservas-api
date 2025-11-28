@@ -1,61 +1,64 @@
-import express, { type Request, type Response, type NextFunction } from 'express';
+import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 
 const app = express();
 
-/* ---------- CORS via ENV ---------- */
+app.use(helmet());
+
+// --- Whitelist ---
+const RAW_ORIGINS = [
+  'https://reservas.mane.com.vc',
+  'https://mane.com.vc',
+  'https://admin.mane.com.vc',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:4000',
+] as const;
+
 function normalizeOrigin(origin?: string | null) {
   if (!origin) return '';
   try {
     const u = new URL(origin);
-    return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
+    const port = u.port ? `:${u.port}` : '';
+    return `${u.protocol}//${u.hostname}${port}`;
   } catch {
-    return String(origin).trim().replace(/\/+$/, '');
+    return origin.trim().replace(/\/+$/, '');
   }
 }
-
-// Lê do env (CSV). Se faltar, usa alguns padrões de dev.
-const CSV = process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean) ?? [
-  'http://localhost:3000',
-  'http://localhost:5173',
-  'http://127.0.0.1:4000',
-];
-const ALLOWED = new Set(CSV.map(normalizeOrigin));
-
-// credenciais opcionais via env (default true)
-const CREDENTIALS = String(process.env.CORS_CREDENTIALS ?? 'true').toLowerCase() === 'true';
+const ALLOWED = new Set(RAW_ORIGINS.map(normalizeOrigin));
 
 const corsOptions: cors.CorsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // curl/healthcheck
-    const ok = ALLOWED.has(normalizeOrigin(origin));
-    return ok ? cb(null, true) : cb(new Error(`Not allowed by CORS: ${origin}`));
+    if (!origin) return cb(null, true); // curl/healthchecks
+    const norm = normalizeOrigin(origin);
+    if (ALLOWED.has(norm)) return cb(null, true);
+    return cb(new Error(`Not allowed by CORS: ${origin}`));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: undefined,        // reflete o Access-Control-Request-Headers
+  // Deixe undefined para refletir automaticamente o Access-Control-Request-Headers
+  allowedHeaders: undefined,
   exposedHeaders: ['Content-Length', 'Content-Range'],
-  credentials: CREDENTIALS,
-  maxAge: 600,
-  optionsSuccessStatus: 204,
+  credentials: true,         // true se usa cookies/sessão cross-site
+  maxAge: 600,               // cache do preflight
+  optionsSuccessStatus: 204, // status do preflight
 };
 
-/* ---------- ORDEM IMPORTA ---------- */
+// 1) Aplica CORS global
 app.use(cors(corsOptions));
-app.options('/(.*)', cors(corsOptions));         // Express 5
 
-app.use(helmet({ crossOriginResourcePolicy: false }));
+// 2) Intercepta QUALQUER OPTIONS (Express 5: sem '*')
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return cors(corsOptions)(req, res, () => res.sendStatus(204));
+  }
+  next();
+});
+
+// body parser depois do CORS
 app.use(express.json());
 
-/* Rotas */
+// suas rotas…
 // app.use('/v1', routes);
-
-/* Erro de CORS (log amigável) */
-app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
-  if (err && String(err.message || '').includes('Not allowed by CORS')) {
-    return res.status(403).json({ error: 'CORS_FORBIDDEN', message: err.message });
-  }
-  return next(err);
-});
 
 export default app;
