@@ -56,10 +56,11 @@ export function buildServer() {
   // Proxy (Railway / Nginx)
   app.set('trust proxy', 1);
 
-  /* ========= CORS (vem ANTES do helmet/rotas) ========= */
+  /* ========= CORS (vem ANTES de tudo) ========= */
   const rawCors = (process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '').trim();
   const origins = parseOriginsCSV(rawCors);
   if (origins.length === 0) {
+    // fallback dev
     origins.push(
       'http://localhost:3000',
       'http://localhost:5173',
@@ -67,28 +68,50 @@ export function buildServer() {
     );
   }
 
+  const isAllowed = (origin?: string) => {
+    if (!origin) return false;
+    const norm = normalizeOrigin(origin);
+    return origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === norm));
+  };
+
+  // 👉 UNIVERSAL: aplica headers CORS em TODAS as respostas (e resolve preflight)
+  app.use((req, res, next) => {
+    const origin = req.headers.origin as string | undefined;
+    if (origin && isAllowed(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin, Access-Control-Request-Headers');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      const reqHeaders =
+        (req.headers['access-control-request-headers'] as string | undefined) ||
+        'Content-Type, Authorization, X-Requested-With, X-Client-Version, X-CSRF-Token';
+      res.setHeader('Access-Control-Allow-Headers', reqHeaders);
+      res.setHeader('Access-Control-Max-Age', '600');
+    }
+    if (req.method === 'OPTIONS') {
+      return isAllowed(origin) ? res.sendStatus(204) : res.sendStatus(403);
+    }
+    next();
+  });
+
+  // (mantém cors() por compat — não atrapalha)
   const corsOptions: CorsOptions = {
     origin(origin, cb) {
       if (!origin) return cb(null, true); // curl/health
-      const norm = normalizeOrigin(origin);
-      const ok = origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === norm));
-      return ok ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
+      return isAllowed(origin) ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
     optionsSuccessStatus: 204,
-    // allowedHeaders undefined -> reflete Access-Control-Request-Headers
   };
-
   app.use(cors(corsOptions));
   // Express 5: pattern string '/(.*)' (nada de '*')
   app.options('/(.*)', cors(corsOptions));
 
-  // Parsers
+  /* ========= Parsers / infra ========= */
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true }));
 
-  // Compressão
   app.use(compression());
 
   // Helmet (depois do CORS para não conflitar)
@@ -166,15 +189,16 @@ export function buildServer() {
     next();
   });
 
-  // Rotas públicas
+  /* ========= Rotas ========= */
+  // públicas
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
   app.use('/v1/units/public', unitsPublicRouter);
 
-  // Auth
+  // auth
   app.use('/v1/auth', authRoutes);
 
-  // Rotas privadas/admin
+  // privadas/admin
   app.use('/v1/reservations', reservationsRouter);
   app.use('/v1/reservations', reservationsGuestsRouter); // convidados
   app.use('/v1/areas', areasRouter);
