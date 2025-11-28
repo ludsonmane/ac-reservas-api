@@ -1,52 +1,49 @@
-// api/src/index.ts
-import 'dotenv/config'; // garante variáveis carregadas cedo
-import { env } from './config/env';
-import { logger } from './config/logger';
 import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+
 const app = express();
 
-// middlewares básicos (caso já tenha em outro lugar, pode remover estes)
+app.use(helmet());
+
+// Whitelist de origens permitidas (pode usar .env)
+const ALLOWED_ORIGINS = [
+  'https://reservas.mane.com.vc',
+  'https://mane.com.vc',
+  'https://admin.mane.com.vc',
+  'http://localhost:3000',
+  'http://localhost:5173',   // sem "/" no final
+  'http://127.0.0.1:4000',   // adiciona o esquema http://
+];
+
+const corsOptions: cors.CorsOptions = {
+  origin(origin, cb) {
+    // requests sem Origin (ex.: curl, healthcheck) são liberados
+    if (!origin) return cb(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    // bloqueia as demais
+    return cb(new Error('Not allowed by CORS'), false);
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'X-Client-Version',
+    'X-CSRF-Token',
+  ],
+  exposedHeaders: ['Content-Length', 'Content-Range'],
+  credentials: true,         // deixe true se usa cookie/sessão; false se só Bearer
+  maxAge: 600,               // cache do preflight (10 min)
+};
+
+app.use(cors(corsOptions));
+// importante: responder preflight antes das rotas
+app.options('*', cors(corsOptions));
+
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// ===== monte aqui as rotas existentes do seu projeto =====
-// exemplo (se você tiver um registrador central):
-// import { mountAllRoutes } from './infrastructure/http/mountAllRoutes';
-// mountAllRoutes(app);
+// ... suas rotas
+// app.use('/v1', routes);
 
-// ------- healthcheck (opcional) -------
-app.get('/health', (_req, res) => res.json({ ok: true }));
-
-// ------- start -------
-const PORT = Number(process.env.PORT ?? env.PORT ?? 4000);
-const HOST = String(process.env.HOST ?? env.HOST ?? '0.0.0.0');
-
-const server = app.listen(PORT, HOST, () => {
-  logger.info({ PORT, HOST, mode: process.env.NODE_ENV }, `[api] listening on http://${HOST}:${PORT}`);
-});
-
-// ----- graceful shutdown -----
-function shutdown(signal: NodeJS.Signals) {
-  logger.warn({ signal }, 'received signal, closing server...');
-  server.close(err => {
-    if (err) {
-      logger.error({ err }, 'error on server close');
-      process.exit(1);
-    }
-    logger.info('server closed. bye 👋');
-    process.exit(0);
-  });
-}
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
-
-// ----- global error handlers -----
-process.on('unhandledRejection', (reason) => {
-  logger.error({ reason }, 'unhandledRejection');
-});
-
-process.on('uncaughtException', (err) => {
-  logger.fatal({ err }, 'uncaughtException');
-  // opcional: encerrar para reinício limpo em prod
-  process.exit(1);
-});
+export default app;
