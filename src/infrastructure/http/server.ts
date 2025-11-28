@@ -10,7 +10,6 @@ import fs from 'fs';
 
 import swaggerUi from 'swagger-ui-express';
 import { logger } from '../../config/logger';
-import { unitsPublicRouter } from './routes/units.public.routes';
 import { notFound } from './middlewares/notFound';
 import { errorHandler } from './middlewares/errorHandler';
 
@@ -23,7 +22,7 @@ import { areasRouter } from './routes/areas.routes';
 import { areasPublicRouter } from './routes/areas.public.routes';
 import areasUploadRouter from './routes/areas.upload.routes';
 import { usersRouter } from './routes/users.routes';
-// ✅ convidados
+import { unitsPublicRouter } from './routes/units.public.routes';
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
 
 /* ========= Helpers de CORS ========= */
@@ -37,7 +36,7 @@ function normalizeOrigin(origin?: string | null) {
   }
 }
 
-function parseOrigins(value?: string): (string | RegExp)[] {
+function parseOriginsCSV(value?: string): (string | RegExp)[] {
   if (!value) return [];
   return value
     .split(',')
@@ -45,7 +44,7 @@ function parseOrigins(value?: string): (string | RegExp)[] {
     .filter(Boolean)
     .map((v) => {
       if (v.startsWith('/') && v.endsWith('/')) {
-        try { return new RegExp(v.slice(1, -1)); } catch { /* ignora regex inválida */ }
+        try { return new RegExp(v.slice(1, -1)); } catch { /* ignore */ }
       }
       return normalizeOrigin(v);
     });
@@ -58,11 +57,9 @@ export function buildServer() {
   app.set('trust proxy', 1);
 
   /* ========= CORS (vem ANTES do helmet/rotas) ========= */
-  // Aceita CORS_ORIGIN ou CORS_ORIGINS (CSV)
   const rawCors = (process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '').trim();
-  const origins = parseOrigins(rawCors);
+  const origins = parseOriginsCSV(rawCors);
   if (origins.length === 0) {
-    // fallback dev
     origins.push(
       'http://localhost:3000',
       'http://localhost:5173',
@@ -72,22 +69,19 @@ export function buildServer() {
 
   const corsOptions: CorsOptions = {
     origin(origin, cb) {
-      // requests sem Origin (curl/healthcheck) -> libera
-      if (!origin) return cb(null, true);
+      if (!origin) return cb(null, true); // curl/health
       const norm = normalizeOrigin(origin);
-      const ok = origins.some((o) =>
-        o instanceof RegExp ? o.test(origin) : o === norm
-      );
+      const ok = origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === norm));
       return ok ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
     },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    credentials: true,           // necessário se usar cookies/sessão cross-site
-    optionsSuccessStatus: 204,   // 204 no preflight
-    // allowedHeaders indefinido -> o pacote reflete o Access-Control-Request-Headers
+    credentials: true,
+    optionsSuccessStatus: 204,
+    // allowedHeaders undefined -> reflete Access-Control-Request-Headers
   };
 
   app.use(cors(corsOptions));
-  // Express 5: use string pattern /(.*) (não use '*')
+  // Express 5: pattern string '/(.*)' (nada de '*')
   app.options('/(.*)', cors(corsOptions));
 
   // Parsers
@@ -117,7 +111,6 @@ export function buildServer() {
     ? path.resolve(process.env.UPLOADS_DIR)
     : path.resolve(process.cwd(), 'uploads');
 
-  // 🔎 LOGA ONDE ESTÁ SALVANDO (confira nos logs que é /data/uploads)
   console.log('[uploads] UPLOADS_DIR =', UPLOADS_DIR);
 
   // garante estrutura de diretórios para uploads
@@ -132,7 +125,6 @@ export function buildServer() {
     console.error('[uploads] failed to ensure dirs', e);
   }
 
-  // garante pastas
   for (const sub of ['areas', 'units', 'temp']) {
     const dir = path.join(UPLOADS_DIR, sub);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -148,7 +140,7 @@ export function buildServer() {
   app.use(
     '/uploads',
     express.static(UPLOADS_DIR, {
-      fallthrough: false, // se não achar arquivo, retorna 404 aqui (não cai nas rotas)
+      fallthrough: false,
       index: false,
       extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
       setHeaders(res) {
@@ -172,40 +164,6 @@ export function buildServer() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     next();
-  });
-
-  // --- DEBUG STORAGE (temporário) ---
-  app.get('/__storage', async (_req, res) => {
-    try {
-      const raw = process.env.UPLOADS_DIR || '';
-      const resolved = require('path').resolve(raw || process.cwd(), 'uploads');
-      const fs = require('fs');
-      const areas = require('path').join(resolved, 'areas');
-
-      const exists = fs.existsSync(resolved);
-      const areasExists = fs.existsSync(areas);
-      let areasFiles: string[] = [];
-      try { areasFiles = areasExists ? fs.readdirSync(areas) : []; } catch { }
-
-      // teste de escrita
-      let writeOk = false;
-      try {
-        fs.writeFileSync(require('path').join(resolved, 'temp', '.probe'), String(Date.now()), { flag: 'w' });
-        writeOk = true;
-      } catch { }
-
-      res.json({
-        UPLOADS_DIR_env: raw || '(vazio)',
-        resolvedPath: resolved,
-        exists,
-        areasExists,
-        writeOk,
-        areasCount: areasFiles.length,
-        sample: areasFiles.slice(0, 10),
-      });
-    } catch (e: any) {
-      res.status(500).json({ error: e?.message || String(e) });
-    }
   });
 
   // Rotas públicas

@@ -1,35 +1,28 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.errorHandler = errorHandler;
-const zod_1 = require("zod");
-const logger_1 = require("../../../config/logger");
-function fromZod(err) {
-    return {
-        message: 'Validation error',
-        issues: err.issues.map(i => ({
-            path: i.path.join('.'),
-            message: i.message,
-            code: i.code
-        }))
-    };
-}
+/**
+ * Middleware global de erro.
+ * - Loga stack em NODE_ENV !== 'production'
+ * - Retorna JSON consistente
+ */
 function errorHandler(err, _req, res, _next) {
-    // Zod
-    if (err instanceof zod_1.ZodError) {
-        logger_1.logger.warn({ err }, 'zod validation error');
-        return res.status(400).json(fromZod(err));
+    const status = (typeof err?.status === 'number' && err.status) ||
+        (typeof err?.statusCode === 'number' && err.statusCode) ||
+        500;
+    const isProd = process.env.NODE_ENV === 'production';
+    // Mensagem segura em produção
+    const message = (typeof err?.message === 'string' && err.message) ||
+        (status === 404 ? 'Recurso não encontrado.' : 'Erro interno do servidor.');
+    if (!isProd) {
+        // Log mais verboso em dev
+        // eslint-disable-next-line no-console
+        console.error('[errorHandler]', err);
     }
-    const status = typeof err.status === 'number' ? err.status : 500;
-    const payload = {
-        message: err.message || 'Internal Server Error',
-        code: err.code,
-        details: err.details && process.env.NODE_ENV !== 'production' ? err.details : undefined
-    };
-    if (status >= 500) {
-        logger_1.logger.error({ err }, 'unhandled error');
-    }
-    else {
-        logger_1.logger.warn({ err }, 'handled error');
-    }
-    return res.status(status).json(payload);
+    res.status(status).json({
+        error: status === 404 ? 'NOT_FOUND' : 'INTERNAL_ERROR',
+        message,
+        ...(isProd ? {} : { stack: err?.stack, details: err }), // inclui detalhes só em dev
+    });
 }
+exports.default = errorHandler;

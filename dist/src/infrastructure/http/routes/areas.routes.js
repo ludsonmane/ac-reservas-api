@@ -6,6 +6,17 @@ const express_1 = require("express");
 const prisma_1 = require("../../db/prisma");
 const requireAuth_1 = require("../middlewares/requireAuth");
 exports.areasRouter = (0, express_1.Router)();
+/* ---------- URL helper p/ imagem absoluta (S3/CDN) ---------- */
+function toAbsoluteMedia(pathOrNull) {
+    if (!pathOrNull)
+        return null;
+    if (/^https?:\/\//i.test(pathOrNull))
+        return pathOrNull; // já é absoluto
+    const base = (process.env.S3_PUBLIC_URL_BASE || '').replace(/\/+$/, '');
+    if (!base)
+        return pathOrNull; // fallback: mantém relativo
+    return pathOrNull.startsWith('/') ? `${base}${pathOrNull}` : `${base}/${pathOrNull}`;
+}
 /* ---------- Utils ---------- */
 function toIntOrNull(v) {
     if (v === '' || v === null || typeof v === 'undefined')
@@ -67,12 +78,15 @@ exports.areasRouter.get('/', requireAuth_1.requireAuth, (0, requireAuth_1.requir
             include: {
                 unit: { select: { id: true, name: true, slug: true } },
             },
-            // Nota: sem select → Prisma retorna todos os campos, incluindo iconEmoji/description
         }),
         prisma_1.prisma.area.count({ where }),
     ]);
+    const payload = items.map((a) => ({
+        ...a,
+        photoUrlAbsolute: toAbsoluteMedia(a.photoUrl),
+    }));
     res.json({
-        items,
+        items: payload,
         total,
         page: Math.max(1, Number(page)),
         pageSize: take,
@@ -121,8 +135,14 @@ exports.areasRouter.post('/', requireAuth_1.requireAuth, (0, requireAuth_1.requi
     if (typeof descriptionRaw !== 'undefined')
         data.description = description; // idem
     try {
-        const created = await prisma_1.prisma.area.create({ data });
-        res.status(201).json(created);
+        const created = await prisma_1.prisma.area.create({
+            data,
+            include: { unit: { select: { id: true, name: true, slug: true } } },
+        });
+        res.status(201).json({
+            ...created,
+            photoUrlAbsolute: toAbsoluteMedia(created.photoUrl),
+        });
     }
     catch (e) {
         if (String(e?.code) === 'P2002') {
@@ -141,7 +161,10 @@ exports.areasRouter.get('/:id', requireAuth_1.requireAuth, (0, requireAuth_1.req
     });
     if (!a)
         return res.status(404).json({ error: 'Área não encontrada' });
-    res.json(a);
+    res.json({
+        ...a,
+        photoUrlAbsolute: toAbsoluteMedia(a.photoUrl),
+    });
 });
 /* ============================================================
  * PUT /v1/areas/:id (ADMIN) — atualiza (total/parcial)
@@ -194,8 +217,12 @@ async function updateArea(req, res) {
         const updated = await prisma_1.prisma.area.update({
             where: { id: String(req.params.id) },
             data,
+            include: { unit: { select: { id: true, name: true, slug: true } } },
         });
-        res.json(updated);
+        res.json({
+            ...updated,
+            photoUrlAbsolute: toAbsoluteMedia(updated.photoUrl),
+        });
     }
     catch (e) {
         if (String(e?.code) === 'P2025')
@@ -247,5 +274,9 @@ exports.areasRouter.get('/public/by-unit/:unitId', async (req, res) => {
         },
         orderBy: { name: 'asc' },
     });
-    res.json(items);
+    const payload = items.map((a) => ({
+        ...a,
+        photoUrlAbsolute: toAbsoluteMedia(a.photoUrl),
+    }));
+    res.json(payload);
 });

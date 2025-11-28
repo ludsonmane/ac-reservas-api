@@ -116,9 +116,7 @@ router.post('/:id/photo', requireAuth_1.requireAuth, (0, requireAuth_1.requireRo
             Bucket: S3_BUCKET,
             Key: key,
             Body: file.buffer,
-            ContentType: contentType,
-            // Se bucket for privado/CloudFront, REMOVA a ACL abaixo.
-            ACL: 'public-read',
+            ContentType: contentType
         }));
         const photoUrl = `/${key}`; // relativo (compatível com o resto do app)
         const photoUrlAbsolute = absoluteUrlForKey(key, req);

@@ -24,12 +24,23 @@ const reservations_public_routes_1 = require("./routes/reservations.public.route
 const units_routes_1 = require("./routes/units.routes");
 const areas_routes_1 = require("./routes/areas.routes");
 const areas_public_routes_1 = require("./routes/areas.public.routes");
-const units_public_routes_1 = require("./routes/units.public.routes");
 const areas_upload_routes_1 = __importDefault(require("./routes/areas.upload.routes"));
 const users_routes_1 = require("./routes/users.routes");
-// ✅ convidados
+const units_public_routes_1 = require("./routes/units.public.routes");
 const reservations_guests_routes_1 = __importDefault(require("./routes/reservations.guests.routes"));
-function parseOrigins(value) {
+/* ========= Helpers de CORS ========= */
+function normalizeOrigin(origin) {
+    if (!origin)
+        return '';
+    try {
+        const u = new URL(origin);
+        return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
+    }
+    catch {
+        return String(origin).trim().replace(/\/+$/, '');
+    }
+}
+function parseOriginsCSV(value) {
     if (!value)
         return [];
     return value
@@ -41,21 +52,43 @@ function parseOrigins(value) {
             try {
                 return new RegExp(v.slice(1, -1));
             }
-            catch { }
+            catch { /* ignore */ }
         }
-        return v;
+        return normalizeOrigin(v);
     });
 }
 function buildServer() {
     const app = (0, express_1.default)();
     // Proxy (Railway / Nginx)
     app.set('trust proxy', 1);
+    /* ========= CORS (vem ANTES do helmet/rotas) ========= */
+    const rawCors = (process.env.CORS_ORIGIN || process.env.CORS_ORIGINS || '').trim();
+    const origins = parseOriginsCSV(rawCors);
+    if (origins.length === 0) {
+        origins.push('http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:4000');
+    }
+    const corsOptions = {
+        origin(origin, cb) {
+            if (!origin)
+                return cb(null, true); // curl/health
+            const norm = normalizeOrigin(origin);
+            const ok = origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === norm));
+            return ok ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
+        },
+        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        credentials: true,
+        optionsSuccessStatus: 204,
+        // allowedHeaders undefined -> reflete Access-Control-Request-Headers
+    };
+    app.use((0, cors_1.default)(corsOptions));
+    // Express 5: pattern string '/(.*)' (nada de '*')
+    app.options('/(.*)', (0, cors_1.default)(corsOptions));
     // Parsers
     app.use(express_1.default.json({ limit: '2mb' }));
     app.use(express_1.default.urlencoded({ extended: true }));
     // Compressão
     app.use((0, compression_1.default)());
-    // Helmet
+    // Helmet (depois do CORS para não conflitar)
     app.use((0, helmet_1.default)({
         contentSecurityPolicy: false,
         crossOriginResourcePolicy: false, // libera /uploads e /qrcode p/ cross-origin
@@ -66,29 +99,10 @@ function buildServer() {
             ? { maxAge: 60 * 60 * 24 * 180, includeSubDomains: true, preload: true }
             : false,
     }));
-    // CORS
-    const origins = parseOrigins(process.env.CORS_ORIGIN);
-    if (origins.length === 0) {
-        origins.push('http://localhost:3000', 'http://localhost:5173');
-    }
-    const corsOptions = {
-        origin(origin, cb) {
-            if (!origin)
-                return cb(null, true);
-            const ok = origins.some((o) => (o instanceof RegExp ? o.test(origin) : o === origin));
-            return ok ? cb(null, true) : cb(new Error('CORS: Origin not allowed'));
-        },
-        methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        credentials: true,
-        optionsSuccessStatus: 204,
-    };
-    app.use((0, cors_1.default)(corsOptions));
-    app.options(/.*/, (0, cors_1.default)(corsOptions));
     // Use env UPLOADS_DIR para casar com Multer/NGINX. Fallback: ./uploads
     const UPLOADS_DIR = process.env.UPLOADS_DIR
         ? path_1.default.resolve(process.env.UPLOADS_DIR)
         : path_1.default.resolve(process.cwd(), 'uploads');
-    // 🔎 LOGA ONDE ESTÁ SALVANDO (confira nos logs que é /data/uploads)
     console.log('[uploads] UPLOADS_DIR =', UPLOADS_DIR);
     // garante estrutura de diretórios para uploads
     const AREAS_DIR = path_1.default.join(UPLOADS_DIR, 'areas');
@@ -102,20 +116,19 @@ function buildServer() {
     catch (e) {
         console.error('[uploads] failed to ensure dirs', e);
     }
-    // garante pastas
     for (const sub of ['areas', 'units', 'temp']) {
         const dir = path_1.default.join(UPLOADS_DIR, sub);
         if (!fs_1.default.existsSync(dir))
             fs_1.default.mkdirSync(dir, { recursive: true });
     }
     // cabeçalhos de mídia antes do static
-    app.use('/uploads', (req, res, next) => {
+    app.use('/uploads', (_req, res, next) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         next();
     });
     app.use('/uploads', express_1.default.static(UPLOADS_DIR, {
-        fallthrough: false, // se não achar arquivo, retorna 404 aqui (não cai nas rotas)
+        fallthrough: false,
         index: false,
         extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif'],
         setHeaders(res) {
@@ -134,41 +147,6 @@ function buildServer() {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
         next();
-    });
-    // --- DEBUG STORAGE (temporário) ---
-    app.get('/__storage', async (_req, res) => {
-        try {
-            const raw = process.env.UPLOADS_DIR || '';
-            const resolved = require('path').resolve(raw || process.cwd(), 'uploads');
-            const fs = require('fs');
-            const areas = require('path').join(resolved, 'areas');
-            const exists = fs.existsSync(resolved);
-            const areasExists = fs.existsSync(areas);
-            let areasFiles = [];
-            try {
-                areasFiles = areasExists ? fs.readdirSync(areas) : [];
-            }
-            catch { }
-            // teste de escrita
-            let writeOk = false;
-            try {
-                fs.writeFileSync(require('path').join(resolved, 'temp', '.probe'), String(Date.now()), { flag: 'w' });
-                writeOk = true;
-            }
-            catch { }
-            res.json({
-                UPLOADS_DIR_env: raw || '(vazio)',
-                resolvedPath: resolved,
-                exists,
-                areasExists,
-                writeOk,
-                areasCount: areasFiles.length,
-                sample: areasFiles.slice(0, 10),
-            });
-        }
-        catch (e) {
-            res.status(500).json({ error: e?.message || String(e) });
-        }
     });
     // Rotas públicas
     app.use('/v1/reservations/public', reservations_public_routes_1.reservationsPublicRouter);

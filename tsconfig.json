@@ -6,15 +6,25 @@
     "lib": ["ES2022"],
     "types": ["node"],
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": ".",                 // <- antes tava ".", ajustei pra src
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "incremental": true,
-    "tsBuildInfoFile": "dist/.tsbuildinfo"
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "typeRoots": ["./src/types", "./node_modules/@types"]
+    // "baseUrl": "src"                 // (opcional) se usar imports absolutos
   },
-  "include": ["src/**/*", "prisma/**/*.ts"],
-  "exclude": ["node_modules", "dist", "src/application/services/BlockService.ts"], 
+  "include": [
+    "src/**/*",
+    "src/**/*.d.ts",
+    "prisma/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/application/services/BlockService.ts"
+  ]
 }

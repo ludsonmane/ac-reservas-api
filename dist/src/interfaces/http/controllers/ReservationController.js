@@ -4,8 +4,8 @@ exports.ReservationController = void 0;
 const reservation_dto_1 = require("../dtos/reservation.dto");
 const logger_1 = require("../../../config/logger");
 const sendReservationTicket_1 = require("../../../services/email/sendReservationTicket");
-const zod_1 = require("zod"); // ✅ novo
-const prisma_1 = require("../../../infrastructure/db/prisma"); // ✅ novo
+const zod_1 = require("zod");
+const prisma_1 = require("../../../infrastructure/db/prisma");
 /* ===== Helpers ===== */
 function toInt(v, fb) {
     const n = Number(v);
@@ -27,6 +27,54 @@ function parseDateMaybe(v) {
     const d = new Date(String(v));
     return Number.isNaN(+d) ? undefined : d;
 }
+/** Normaliza ID vindo na query: '', 'undefined', 'null' -> undefined */
+const asId = (v) => {
+    const s = String(v ?? '').trim();
+    return s && s !== 'undefined' && s !== 'null' ? s : undefined;
+};
+/** Normaliza string opcional */
+const asStr = (v) => {
+    const s = String(v ?? '').trim();
+    return s ? s : undefined;
+};
+/* ===== UTM helpers (sem nada de blocks) ===== */
+const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'gclid', 'fbclid'];
+function parseCookieHeader(header) {
+    const out = {};
+    if (!header)
+        return out;
+    header.split(';').forEach((p) => {
+        const i = p.indexOf('=');
+        if (i > -1) {
+            const k = decodeURIComponent(p.slice(0, i).trim());
+            const v = decodeURIComponent(p.slice(i + 1).trim());
+            out[k] = v;
+        }
+    });
+    return out;
+}
+function pickUtm(obj) {
+    const bag = {};
+    UTM_KEYS.forEach((k) => {
+        const v = obj?.[k];
+        if (typeof v === 'string' && v.trim())
+            bag[k] = v.trim();
+    });
+    return bag;
+}
+function extractUtmFromRequest(req) {
+    const fromBody = pickUtm(req.body);
+    const fromQuery = pickUtm(req.query);
+    const cookiesObj = req.cookies && typeof req.cookies === 'object'
+        ? req.cookies
+        : parseCookieHeader(req.headers?.cookie);
+    const fromCookies = pickUtm(cookiesObj);
+    // prioridade: body > query > cookies
+    const utm = { ...fromCookies, ...fromQuery, ...fromBody };
+    const absoluteUrl = `${req.protocol || 'http'}://${req.get?.('host') || req.headers.host}${req.originalUrl || req.url || ''}`;
+    const referrer = req.get?.('referer') || req.headers['referer'] || undefined;
+    return { utm, absoluteUrl, referrer };
+}
 class ReservationController {
     createUC;
     listUC;
@@ -42,6 +90,8 @@ class ReservationController {
     }
     /* ================== POST /v1/reservations ================== */
     create = async (req, res) => {
+        // Coleta UTM (sem blocks)
+        const { utm, absoluteUrl, referrer } = extractUtmFromRequest(req);
         const parsed = reservation_dto_1.CreateReservationDTO.safeParse(req.body);
         if (!parsed.success)
             return res.status(400).json({ error: parsed.error.flatten() });
@@ -61,13 +111,15 @@ class ReservationController {
             email: nonEmptyOrNull(b.email ?? b.contactEmail),
             phone: nonEmptyOrNull(b.phone ?? b.contactPhone),
             notes: nonEmptyOrNull(b.notes),
-            utm_source: nonEmptyOrNull(b.utm_source),
-            utm_medium: nonEmptyOrNull(b.utm_medium),
-            utm_campaign: nonEmptyOrNull(b.utm_campaign),
-            utm_content: nonEmptyOrNull(b.utm_content),
-            utm_term: nonEmptyOrNull(b.utm_term),
-            url: nonEmptyOrNull(b.url),
-            ref: nonEmptyOrNull(b.ref),
+            // UTMs: body tem prioridade; fallback para query/cookies
+            utm_source: nonEmptyOrNull(b.utm_source) ?? nonEmptyOrNull(utm.utm_source),
+            utm_medium: nonEmptyOrNull(b.utm_medium) ?? nonEmptyOrNull(utm.utm_medium),
+            utm_campaign: nonEmptyOrNull(b.utm_campaign) ?? nonEmptyOrNull(utm.utm_campaign),
+            utm_content: nonEmptyOrNull(b.utm_content) ?? nonEmptyOrNull(utm.utm_content),
+            utm_term: nonEmptyOrNull(b.utm_term) ?? nonEmptyOrNull(utm.utm_term),
+            // contexto (auditoria)
+            url: nonEmptyOrNull(b.url) ?? nonEmptyOrNull(absoluteUrl),
+            ref: nonEmptyOrNull(b.ref) ?? nonEmptyOrNull(String(referrer || '')),
             // LEGADO (nome/slug da unidade) — ainda aceito
             unit: nonEmptyOrNull(b.unit),
             source: nonEmptyOrNull(b.source) ?? 'site',
@@ -88,7 +140,6 @@ class ReservationController {
                     email: c.email,
                     phone: c.phone ?? undefined,
                     people: c.people,
-                    // mantém compat: se você denormalizar "unitName" depois, pode trocar aqui
                     unit: c.unit ?? 'Mané Mercado',
                     table: c.table ?? undefined,
                     reservationDate: reservationDateIso,
@@ -109,15 +160,20 @@ class ReservationController {
     list = async (req, res) => {
         const page = Math.max(parseInt(String(req.query.page ?? '1'), 10), 1);
         const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize ?? '20'), 10), 1), 100);
-        const search = String(req.query.search ?? '').trim();
-        const unit = String(req.query.unit ?? '').trim(); // LEGADO (nome/slug)
-        const areaId = String(req.query.areaId ?? '').trim(); // ✅ NOVO
+        const search = asStr(req.query.search) ??
+            asStr(req.query.q) ??
+            asStr(req.query.query) ??
+            '';
+        const unit = asStr(req.query.unit) ?? asStr(req.query.unitSlug) ?? asStr(req.query.unit_slug);
+        const unitId = asId(req.query.unitId) ?? asId(req.query.unit_id);
+        const areaId = asId(req.query.areaId) ?? asId(req.query.area_id);
         const from = parseDateMaybe(req.query.from);
-        const to = parseDateMaybe(req.query.to);
+        const to = parseDateMaybe(req.query.to); // repositório trata "to" como inclusivo
         const { items, total } = await this.listUC.execute({
             search,
-            unit, // legado
-            areaId: areaId || undefined, // ✅ passa se vier
+            unit,
+            unitId,
+            areaId,
             from,
             to,
             skip: (page - 1) * pageSize,
@@ -139,7 +195,6 @@ class ReservationController {
             return res.status(400).json({ error: parsed.error.flatten() });
         const b = parsed.data;
         const payload = { ...b };
-        // normalizações iguais às do create, quando o campo vier no body
         if (b.kids !== undefined)
             payload.kids = Math.max(0, toInt(b.kids, 0));
         if (b.people !== undefined)
@@ -164,12 +219,10 @@ class ReservationController {
             payload.utm_content = nonEmptyOrNull(b.utm_content);
         if (b.utm_term !== undefined)
             payload.utm_term = nonEmptyOrNull(b.utm_term);
-        // LEGADO (strings livres)
         if (b.unit !== undefined)
             payload.unit = nonEmptyOrNull(b.unit);
         if (b.area !== undefined)
             payload.area = nonEmptyOrNull(b.area);
-        // NOVOS (IDs relacionais)
         if (b.unitId !== undefined)
             payload.unitId = nonEmptyOrNull(b.unitId);
         if (b.areaId !== undefined)
@@ -182,12 +235,11 @@ class ReservationController {
         await this.deleteUC.execute(req.params.id);
         return res.sendStatus(204);
     };
-    /* ========== NOVO: POST /v1/reservations/:id/guests/bulk ========== */
+    /* ========== POST /v1/reservations/:id/guests/bulk ========== */
     addGuestsBulk = async (req, res) => {
         const reservationId = String(req.params.id || '').trim();
         if (!reservationId)
             return res.status(400).json({ error: 'Missing reservation id' });
-        // validação de entrada com zod
         const Email = zod_1.z.string().trim().toLowerCase().email();
         const GuestSchema = zod_1.z.object({
             name: zod_1.z.string().trim().min(2, 'name too short').max(200),
@@ -202,21 +254,18 @@ class ReservationController {
             return res.status(400).json({ error: parsed.error.flatten() });
         }
         try {
-            // garante que a reserva existe
             const exists = await prisma_1.prisma.reservation.findUnique({
                 where: { id: reservationId },
                 select: { id: true },
             });
             if (!exists)
                 return res.status(404).json({ error: 'RESERVATION_NOT_FOUND' });
-            // normaliza payload
             const data = parsed.data.guests.map((g) => ({
                 reservationId,
                 name: g.name.trim(),
                 email: g.email.trim().toLowerCase(),
-                role: g.role, // 'GUEST' | 'HOST'
+                role: g.role,
             }));
-            // inserção em massa com proteção de duplicados por (reservationId, email)
             const result = await prisma_1.prisma.guest.createMany({
                 data,
                 skipDuplicates: true,
@@ -226,7 +275,6 @@ class ReservationController {
             return res.status(200).json({ created, skipped });
         }
         catch (err) {
-            // trata erro de índice único ou outros
             if (err?.code === 'P2003') {
                 return res.status(400).json({ error: 'FOREIGN_KEY_CONSTRAINT' });
             }
