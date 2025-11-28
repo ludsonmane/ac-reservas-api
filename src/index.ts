@@ -1,12 +1,10 @@
-import express from 'express';
+import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 
 const app = express();
 
-app.use(helmet());
-
-// --- Whitelist ---
+/* ---------- Whitelist ---------- */
 const RAW_ORIGINS = [
   'https://reservas.mane.com.vc',
   'https://mane.com.vc',
@@ -20,45 +18,44 @@ function normalizeOrigin(origin?: string | null) {
   if (!origin) return '';
   try {
     const u = new URL(origin);
-    const port = u.port ? `:${u.port}` : '';
-    return `${u.protocol}//${u.hostname}${port}`;
+    return `${u.protocol}//${u.hostname}${u.port ? `:${u.port}` : ''}`;
   } catch {
-    return origin.trim().replace(/\/+$/, '');
+    return String(origin).trim().replace(/\/+$/, '');
   }
 }
 const ALLOWED = new Set(RAW_ORIGINS.map(normalizeOrigin));
 
 const corsOptions: cors.CorsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // curl/healthchecks
-    const norm = normalizeOrigin(origin);
-    if (ALLOWED.has(norm)) return cb(null, true);
-    return cb(new Error(`Not allowed by CORS: ${origin}`));
+    if (!origin) return cb(null, true); // curl/healthcheck
+    const ok = ALLOWED.has(normalizeOrigin(origin));
+    return ok ? cb(null, true) : cb(new Error(`Not allowed by CORS: ${origin}`));
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  // Deixe undefined para refletir automaticamente o Access-Control-Request-Headers
   allowedHeaders: undefined,
   exposedHeaders: ['Content-Length', 'Content-Range'],
-  credentials: true,         // true se usa cookies/sessão cross-site
-  maxAge: 600,               // cache do preflight
-  optionsSuccessStatus: 204, // status do preflight
+  credentials: true,
+  maxAge: 600,
+  optionsSuccessStatus: 204,
 };
 
-// 1) Aplica CORS global
+/* ---------- ORDEM IMPORTANTE ---------- */
 app.use(cors(corsOptions));
+app.options('/(.*)', cors(corsOptions));
 
-// 2) Intercepta QUALQUER OPTIONS (Express 5: sem '*')
-app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    return cors(corsOptions)(req, res, () => res.sendStatus(204));
-  }
-  next();
-});
+app.use(helmet({ crossOriginResourcePolicy: false }));
 
-// body parser depois do CORS
 app.use(express.json());
 
-// suas rotas…
+/* Rotas */
 // app.use('/v1', routes);
+
+/* ---------- Handler p/ erros de CORS ---------- */
+app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
+  if (err && String(err.message || '').includes('Not allowed by CORS')) {
+    return res.status(403).json({ error: 'CORS_FORBIDDEN', message: err.message });
+  }
+  return next(err);
+});
 
 export default app;
