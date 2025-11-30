@@ -5,7 +5,11 @@ import { z } from 'zod';
 import utc from 'dayjs/plugin/utc';
 import { prisma } from '../../db/client';
 import { areasService } from '../../../modules/areas/areas.service';
-import { ReservationType } from '@prisma/client';
+import {
+  ReservationType,
+  ReservationBlockMode,
+  ReservationBlockPeriod,
+} from '@prisma/client';
 
 const router = Router();
 dayjs.extend(utc);
@@ -305,9 +309,43 @@ router.post('/', async (req, res) => {
     }
 
     // capacidade por período
+    // capacidade por período + bloqueios operacionais
     const dt = new Date(reservationDate);
-    const { from, to } = periodWindow(dt);
 
+    // 1) checa se o dia/período está bloqueado
+    const dayStart = startOfDay(dt);
+    const dayEnd = endOfDay(dt);
+    const currentPeriod =
+      getPeriodFromDate(dt) === 'AFTERNOON'
+        ? ReservationBlockPeriod.AFTERNOON
+        : ReservationBlockPeriod.NIGHT;
+
+    const blocks = await prisma.reservationBlock.findMany({
+      where: {
+        unitId: unit.id,
+        mode: ReservationBlockMode.PERIOD,
+        date: { gte: dayStart, lte: dayEnd },
+        period: { in: [ReservationBlockPeriod.ALL_DAY, currentPeriod] },
+        OR: [
+          { areaId: null },   // bloqueia a unidade toda
+          { areaId: area.id } // ou bloqueio específico da área
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (blocks.length > 0) {
+      return res.status(409).json({
+        error: {
+          code: 'BLOCKED_DAY',
+          message: 'Reservas bloqueadas para esta data/período. Fale com nossa equipe para mais detalhes.',
+        },
+      });
+    }
+
+    // 2) se passou do bloqueio, segue o fluxo normal de capacidade
+    const { from, to } = periodWindow(dt);
+    
     const maxPeriod =
       getPeriodFromDate(dt) === 'AFTERNOON'
         ? (area.capacityAfternoon ?? 0)

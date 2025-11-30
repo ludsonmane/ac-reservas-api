@@ -1,6 +1,10 @@
 import dayjs from 'dayjs';
 import { prisma } from '../../infrastructure/db/client';
-import { ReservationStatus } from '@prisma/client';
+import {
+  ReservationStatus,
+  ReservationBlockMode,
+  ReservationBlockPeriod,
+} from '@prisma/client';
 
 export type AreaPublicDTO = {
   id: string;
@@ -102,12 +106,12 @@ export const areasService = {
       select: {
         id: true,
         name: true,
-        photoUrl: true,              // existe
+        photoUrl: true,
         capacityAfternoon: true,
         capacityNight: true,
         isActive: true,
-        description: true,           // existe
-        iconEmoji: true,             // existe
+        description: true,
+        iconEmoji: true,
       },
       orderBy: { name: 'asc' },
     });
@@ -129,14 +133,47 @@ export const areasService = {
     // Período (timeHHmm)
     if (timeHHmm) {
       const safeTime = isValidHHmm(timeHHmm) ? timeHHmm : '12:00';
-      const { from, to, period } = periodWindow(base, safeTime);
+
+      // janela do período (tarde/noite)
+      const { from, to, period: currentPeriod } = periodWindow(base, safeTime);
+
+      // Bloqueios por período (PERIOD / ALL_DAY)
+      const dayStart = startOfDay(base);
+      const dayEnd = endOfDay(base);
+
+      const blocks = await prisma.reservationBlock.findMany({
+        where: {
+          unitId,
+          mode: ReservationBlockMode.PERIOD,
+          date: { gte: dayStart, lte: dayEnd },
+          period: {
+            in: [
+              ReservationBlockPeriod.ALL_DAY,
+              currentPeriod === 'AFTERNOON'
+                ? ReservationBlockPeriod.AFTERNOON
+                : ReservationBlockPeriod.NIGHT,
+            ],
+          },
+        },
+        select: { areaId: true },
+      });
+
+      const blockedAll = blocks.some((b) => !b.areaId);
+      const blockedAreas = new Set(
+        blocks.filter((b) => b.areaId).map((b) => b.areaId as string),
+      );
 
       const grouped = await prisma.reservation.groupBy({
         by: ['areaId'],
         where: {
           areaId: { not: null },
           reservationDate: { gte: from, lte: to },
-          status: { in: [ReservationStatus.AWAITING_CHECKIN, ReservationStatus.CHECKED_IN] },
+          status: {
+            in: [
+              ReservationStatus.AWAITING_CHECKIN,
+              ReservationStatus.CHECKED_IN,
+            ],
+          },
         },
         _sum: { people: true, kids: true },
       });
@@ -148,12 +185,17 @@ export const areasService = {
       }
 
       return withResolvedPhoto.map((a) => {
+        const isBlocked = blockedAll || blockedAreas.has(a.id);
+
         const periodCap =
-          period === 'AFTERNOON'
+          currentPeriod === 'AFTERNOON'
             ? (a.capacityAfternoon ?? 0)
             : (a.capacityNight ?? 0);
+
         const used = usedMap.get(a.id) ?? 0;
-        const available = Math.max(0, periodCap - used);
+        const availableBase = Math.max(0, periodCap - used);
+        const available = isBlocked ? 0 : availableBase;
+
         return {
           ...a,
           remaining: available,
@@ -167,12 +209,33 @@ export const areasService = {
     const from = startOfDay(base);
     const to = endOfDay(base);
 
+    // Bloqueios ALL_DAY
+    const dayBlocks = await prisma.reservationBlock.findMany({
+      where: {
+        unitId,
+        mode: ReservationBlockMode.PERIOD,
+        date: { gte: from, lte: to },
+        period: ReservationBlockPeriod.ALL_DAY,
+      },
+      select: { areaId: true },
+    });
+
+    const blockedAllDayAll = dayBlocks.some((b) => !b.areaId);
+    const blockedAllDayAreas = new Set(
+      dayBlocks.filter((b) => b.areaId).map((b) => b.areaId as string),
+    );
+
     const grouped = await prisma.reservation.groupBy({
       by: ['areaId'],
       where: {
         areaId: { not: null },
         reservationDate: { gte: from, lte: to },
-        status: { in: [ReservationStatus.AWAITING_CHECKIN, ReservationStatus.CHECKED_IN] },
+        status: {
+          in: [
+            ReservationStatus.AWAITING_CHECKIN,
+            ReservationStatus.CHECKED_IN,
+          ],
+        },
       },
       _sum: { people: true, kids: true },
     });
@@ -184,9 +247,14 @@ export const areasService = {
     }
 
     return withResolvedPhoto.map((a) => {
-      const dayCap = (a.capacityAfternoon ?? 0) + (a.capacityNight ?? 0);
+      const isBlocked = blockedAllDayAll || blockedAllDayAreas.has(a.id);
+
+      const dayCap =
+        (a.capacityAfternoon ?? 0) + (a.capacityNight ?? 0);
       const used = usedMap.get(a.id) ?? 0;
-      const available = Math.max(0, dayCap - used);
+      const availableBase = Math.max(0, dayCap - used);
+      const available = isBlocked ? 0 : availableBase;
+
       return {
         ...a,
         remaining: available,
