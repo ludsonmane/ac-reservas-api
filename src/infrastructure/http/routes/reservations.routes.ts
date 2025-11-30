@@ -636,4 +636,4 @@ reservationsRouter.put(
   controller.update
 );
 
-reservationsRouter.delete('/:id', requireAuth, requireRole(['ADMIN']), controller.delete);
+reservationsRouter.delete('/:id', requireAuth, requireRole(['STAFF', 'ADMIN']), controller.delete);
