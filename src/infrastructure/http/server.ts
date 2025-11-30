@@ -24,7 +24,7 @@ import areasUploadRouter from './routes/areas.upload.routes';
 import { usersRouter } from './routes/users.routes';
 import { unitsPublicRouter } from './routes/units.public.routes';
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
-
+import { blocksRouter } from './routes/blocks.routes'; // <--- NOVO
 /* ========= Helpers de CORS ========= */
 function normalizeOrigin(origin?: string | null) {
   if (!origin) return '';
@@ -193,7 +193,7 @@ export function buildServer() {
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
   app.use('/v1/units/public', unitsPublicRouter);
-
+  app.use('/v1/blocks', blocksRouter); // <--- NOVO
   // auth
   app.use('/v1/auth', authRoutes);
 
