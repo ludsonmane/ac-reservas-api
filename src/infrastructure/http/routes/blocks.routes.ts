@@ -162,7 +162,7 @@ router.get(
         unitName: b.unit?.name ?? null,
         areaId: b.areaId,
         areaName: b.area?.name ?? null,
-        date: b.date.toISOString(),
+        date: dayjs(b.date).format('YYYY-MM-DD'),
         mode: b.mode,
         period: b.period,
         reason: b.reason,
