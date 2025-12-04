@@ -63,5 +63,93 @@ router.post('/period', requireAuth, requireRole(['ADMIN', 'STAFF']), async (req,
   }
 });
 
+const listQuerySchema = z.object({
+  unitId: z.string().min(1).optional(),
+  areaId: z.string().min(1).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+/**
+ * GET /v1/blocks/period
+ * Lista bloqueios de período (mode = PERIOD).
+ */
+router.get(
+  '/period',
+  requireAuth,
+  requireRole(['ADMIN', 'STAFF']),
+  async (req, res, next) => {
+    try {
+      const parsed = listQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return res.status(400).json({
+          error: {
+            code: 'INVALID_QUERY',
+            message: 'Parâmetros de consulta inválidos.',
+            details: parsed.error.flatten(),
+          },
+        });
+      }
+
+      const { unitId, areaId, from, to } = parsed.data;
+
+      const where: any = {
+        mode: ReservationBlockMode.PERIOD,
+      };
+
+      if (unitId) where.unitId = unitId;
+      if (areaId) where.areaId = areaId;
+
+      if (from || to) {
+        const fromDay = from ? dayjs(from, 'YYYY-MM-DD', true) : null;
+        const toDay = to ? dayjs(to, 'YYYY-MM-DD', true) : null;
+
+        if (from && !fromDay?.isValid()) {
+          return res.status(400).json({
+            error: { code: 'INVALID_FROM', message: 'Parâmetro "from" inválido.' },
+          });
+        }
+        if (to && !toDay?.isValid()) {
+          return res.status(400).json({
+            error: { code: 'INVALID_TO', message: 'Parâmetro "to" inválido.' },
+          });
+        }
+
+        where.date = {};
+        if (fromDay) where.date.gte = fromDay.startOf('day').toDate();
+        if (toDay) where.date.lte = toDay.endOf('day').toDate();
+      }
+
+      const blocks = await prisma.reservationBlock.findMany({
+        where,
+        orderBy: { date: 'asc' },
+        include: {
+          unit: { select: { id: true, name: true } },
+          area: { select: { id: true, name: true } },
+        },
+      });
+
+      const payload = blocks.map((b) => ({
+        id: b.id,
+        unitId: b.unitId,
+        unitName: b.unit?.name ?? null,
+        areaId: b.areaId,
+        areaName: b.area?.name ?? null,
+        date: b.date.toISOString(),
+        mode: b.mode,
+        period: b.period,
+        reason: b.reason,
+        createdBy: b.createdBy,
+        createdAt: b.createdAt.toISOString(),
+        updatedAt: b.updatedAt.toISOString(),
+      }));
+
+      return res.json(payload);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 export { router as blocksRouter };
 export default router;
