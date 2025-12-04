@@ -30,13 +30,12 @@ const listQuerySchema = z.object({
 });
 
 /**
- * Schema para update (PATCH /:id)
- * – todos os campos opcionais
+ * Schema para update (PATCH /:id) – todos os campos opcionais
  */
 const updateSchema = z.object({
   unitId: z.string().min(1).optional(),
   areaId: z.string().min(1).nullable().optional(),
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), // YYYY-MM-DD
   period: z.enum(['AFTERNOON', 'NIGHT', 'ALL_DAY']).optional(),
   reason: z.string().max(255).nullable().optional(),
 });
@@ -49,6 +48,7 @@ router.post(
   '/period',
   requireAuth,
   requireRole(['ADMIN', 'STAFF']),
+  // req tipado como any pra aceitar req.user
   async (req: any, res, next) => {
     try {
       const { unitId, areaId, date, period, reason } = bodySchema.parse(req.body);
@@ -94,7 +94,7 @@ router.post(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -175,7 +175,7 @@ router.get(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -230,7 +230,7 @@ router.patch(
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 /**
@@ -254,11 +254,12 @@ router.delete(
       }
 
       await prisma.reservationBlock.delete({ where: { id } });
+
       return res.status(204).send();
     } catch (err) {
       next(err);
     }
-  }
+  },
 );
 
 export { router as blocksRouter };
