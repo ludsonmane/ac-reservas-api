@@ -24,7 +24,9 @@ import areasUploadRouter from './routes/areas.upload.routes';
 import { usersRouter } from './routes/users.routes';
 import { unitsPublicRouter } from './routes/units.public.routes';
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
-import { blocksRouter } from './routes/blocks.routes'; // <--- NOVO
+import { blocksRouter } from './routes/blocks.routes';
+import { apiKeyAuth } from './middlewares/apiKeyAuth';
+
 /* ========= Helpers de CORS ========= */
 function normalizeOrigin(origin?: string | null) {
   if (!origin) return '';
@@ -44,7 +46,11 @@ function parseOriginsCSV(value?: string): (string | RegExp)[] {
     .filter(Boolean)
     .map((v) => {
       if (v.startsWith('/') && v.endsWith('/')) {
-        try { return new RegExp(v.slice(1, -1)); } catch { /* ignore */ }
+        try {
+          return new RegExp(v.slice(1, -1));
+        } catch {
+          /* ignore */
+        }
       }
       return normalizeOrigin(v);
     });
@@ -178,7 +184,9 @@ export function buildServer() {
   app.use(rateLimit({ windowMs: 60_000, limit: 120 }));
 
   // Health
-  app.get('/', (_req, res) => res.json({ ok: true, service: 'api', ts: new Date().toISOString() }));
+  app.get('/', (_req, res) =>
+    res.json({ ok: true, service: 'api', ts: new Date().toISOString() })
+  );
   app.get('/health', (_req, res) => res.json({ ok: true, ts: new Date().toISOString() }));
 
   // Header p/ QR (embed cross-origin)
@@ -189,11 +197,17 @@ export function buildServer() {
   });
 
   /* ========= Rotas ========= */
-  // públicas
+  // públicas (sem token)
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
   app.use('/v1/units/public', unitsPublicRouter);
-  app.use('/v1/blocks', blocksRouter); // <--- NOVO
+  app.use('/v1/blocks', blocksRouter); // continua público
+
+  // 🔑 Rotas para integrações externas (token fixo via x-api-key)
+  app.use('/v1/integrations/reservations', apiKeyAuth, reservationsPublicRouter);
+  app.use('/v1/integrations/areas', apiKeyAuth, areasPublicRouter);
+  app.use('/v1/integrations/units', apiKeyAuth, unitsPublicRouter);
+
   // auth
   app.use('/v1/auth', authRoutes);
 
