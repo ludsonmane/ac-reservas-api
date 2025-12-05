@@ -208,6 +208,9 @@ export function buildServer() {
   app.use('/v1/integrations/areas', apiKeyAuth, areasPublicRouter);
   app.use('/v1/integrations/units', apiKeyAuth, unitsPublicRouter);
 
+   // 🔑 Admin via token (lista TODAS as reservas, mesmo router do painel)
+  app.use('/v1/integrations/admin/reservations', apiKeyAuth, reservationsRouter);
+  
   // auth
   app.use('/v1/auth', authRoutes);
 
