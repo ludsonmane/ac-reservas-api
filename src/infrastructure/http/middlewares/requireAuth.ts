@@ -12,7 +12,7 @@ export interface JwtPayloadMinimal {
 }
 
 function getBearerToken(req: Request): string | undefined {
-  const h = (req.headers.authorization || req.headers.Authorization) as string | undefined;
+  const h = (req.headers.authorization || (req.headers as any).Authorization) as string | undefined;
   if (!h || typeof h !== 'string') return undefined;
   const [type, token] = h.split(' ');
   if (!type || type.toLowerCase() !== 'bearer') return undefined;
@@ -41,19 +41,53 @@ function verifyToken(token: string): JwtPayloadMinimal | null {
   }
 }
 
+// pega x-api-key (case-insensitive, array-safe)
+function getApiKeyHeader(req: Request): string | undefined {
+  const raw =
+    (req.headers['x-api-key'] as string | string[] | undefined) ??
+    ((req.headers as any)['X-API-KEY'] as string | string[] | undefined);
+
+  if (Array.isArray(raw)) return raw[0];
+  if (typeof raw === 'string') return raw.trim();
+  return undefined;
+}
+
 /** Factory que exige auth e, opcionalmente, restringe por roles. */
 export function makeRequireAuth(roles?: ReadonlyArray<Role>): RequestHandler {
   const allowed = roles && new Set(roles);
 
   return (req: Request, res: Response, next: NextFunction) => {
+    /* 1) Atalho: auth via x-api-key (token fixo de integrações) */
+    const apiKey = getApiKeyHeader(req);
+    const externalKey = process.env.EXTERNAL_API_KEY;
+
+    if (apiKey && externalKey && apiKey === externalKey) {
+      // Autentica como "usuário de sistema" com role ADMIN.
+      // Isso passa em qualquer requireRole(['ADMIN']) etc.
+      (req as any).user = {
+        id: 'system-api',
+        role: 'ADMIN' as Role,
+        email: undefined,
+        apiKeyAuth: true,
+      };
+      return next();
+    }
+    // Se não tem x-api-key ou não bateu, segue fluxo normal de JWT
+    // (não mudamos nada do comportamento antigo pro painel / login)
+
+    /* 2) Fluxo padrão: Bearer + cookie */
     const token = getBearerToken(req) || getCookieToken(req);
-    if (!token) return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Missing token' });
+    if (!token) {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Missing token' });
+    }
 
     const payload = verifyToken(token);
-    if (!payload) return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Invalid token' });
+    if (!payload) {
+      return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Invalid token' });
+    }
 
     // Preenche req.user (tipado via augmentation)
-    req.user = {
+    (req as any).user = {
       id: (payload.sub || payload.id || '') as string,
       role: (payload.role || 'USER') as Role,
       email: payload.email,
@@ -61,7 +95,7 @@ export function makeRequireAuth(roles?: ReadonlyArray<Role>): RequestHandler {
     };
 
     // Usa variável local tipada para evitar Role | undefined
-    const role: Role = (req.user?.role ?? 'USER') as Role;
+    const role: Role = (((req as any).user?.role) ?? 'USER') as Role;
 
     if (allowed && !allowed.has(role)) {
       return res.status(403).json({ error: 'FORBIDDEN', message: 'Insufficient role' });
@@ -83,7 +117,7 @@ export const softAuth: RequestHandler = (req, _res, next) => {
   const token = getBearerToken(req) || getCookieToken(req);
   const payload = token ? verifyToken(token) : null;
   if (payload) {
-    req.user = {
+    (req as any).user = {
       id: (payload.sub || payload.id || '') as string,
       role: (payload.role || 'USER') as Role,
       email: payload.email,
