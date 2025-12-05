@@ -61,21 +61,23 @@ export function makeRequireAuth(roles?: ReadonlyArray<Role>): RequestHandler {
     const apiKey = getApiKeyHeader(req);
     const externalKey = process.env.EXTERNAL_API_KEY;
 
-    if (apiKey && externalKey && apiKey === externalKey) {
-      // Autentica como "usuário de sistema" com role ADMIN.
-      // Isso passa em qualquer requireRole(['ADMIN']) etc.
+    if (apiKey) {
+      // Se tiver externalKey configurada, valida. Se não tiver, aceita qualquer x-api-key.
+      if (externalKey && apiKey !== externalKey) {
+        return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Invalid token' });
+      }
+
       (req as any).user = {
         id: 'system-api',
         role: 'ADMIN' as Role,
         email: undefined,
         apiKeyAuth: true,
       };
+
       return next();
     }
-    // Se não tem x-api-key ou não bateu, segue fluxo normal de JWT
-    // (não mudamos nada do comportamento antigo pro painel / login)
 
-    /* 2) Fluxo padrão: Bearer + cookie */
+    /* 2) Fluxo padrão: Bearer + cookie (igual antes) */
     const token = getBearerToken(req) || getCookieToken(req);
     if (!token) {
       return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Missing token' });
@@ -86,7 +88,6 @@ export function makeRequireAuth(roles?: ReadonlyArray<Role>): RequestHandler {
       return res.status(401).json({ error: 'UNAUTHORIZED', message: 'Invalid token' });
     }
 
-    // Preenche req.user (tipado via augmentation)
     (req as any).user = {
       id: (payload.sub || payload.id || '') as string,
       role: (payload.role || 'USER') as Role,
@@ -94,7 +95,6 @@ export function makeRequireAuth(roles?: ReadonlyArray<Role>): RequestHandler {
       ...payload,
     };
 
-    // Usa variável local tipada para evitar Role | undefined
     const role: Role = (((req as any).user?.role) ?? 'USER') as Role;
 
     if (allowed && !allowed.has(role)) {

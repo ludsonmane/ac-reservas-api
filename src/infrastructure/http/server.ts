@@ -26,6 +26,7 @@ import { unitsPublicRouter } from './routes/units.public.routes';
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
 import { blocksRouter } from './routes/blocks.routes';
 import { apiKeyAuth } from './middlewares/apiKeyAuth';
+import { requireAuth } from './middlewares/requireAuth'; // 🔥 IMPORTA AQUI
 
 /* ========= Helpers de CORS ========= */
 function normalizeOrigin(origin?: string | null) {
@@ -209,8 +210,8 @@ export function buildServer() {
   app.use('/v1/integrations/units', apiKeyAuth, unitsPublicRouter);
 
    // 🔑 Admin via token (lista TODAS as reservas, mesmo router do painel)
-  app.use('/v1/integrations/admin/reservations', apiKeyAuth, reservationsRouter);
-  
+  app.use('/v1/integrations/admin/reservations', requireAuth, reservationsRouter);
+
   // auth
   app.use('/v1/auth', authRoutes);
 
