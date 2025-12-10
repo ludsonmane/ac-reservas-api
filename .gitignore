@@ -1,0 +1,33 @@
+# env & secrets
+.env
+.env.*            # .env.local, .env.production, etc.
+!*.example        # mas versiona .env.example
+sendgrid.env
+
+# deps
+node_modules/
+
+# builds
+dist/
+build/
+.out/
+.next/
+.vercel/
+coverage/
+tsconfig.tsbuildinfo
+
+# uploads/temp
+uploads/
+.tmp/
+temp/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# archives
+*.zip
+*.tar
+*.tar.gz

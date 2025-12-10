@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE `Area` ADD COLUMN `capacityAfternoon` INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN `capacityNight` INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN `photoUrl` VARCHAR(512) NULL;

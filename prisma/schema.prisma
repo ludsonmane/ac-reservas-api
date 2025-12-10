@@ -1,0 +1,225 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "mysql"
+  url       = env("DATABASE_URL")
+}
+
+/**
+ * ===== Enums =====
+ */
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+enum ReservationStatus {
+  AWAITING_CHECKIN
+  CHECKED_IN
+}
+
+enum GuestRole {
+  GUEST
+  HOST
+}
+
+enum ReservationType {
+  PARTICULAR
+  CONFRATERNIZACAO
+  EMPRESA
+  ANIVERSARIO
+}
+
+/**
+ * 🔒 Bloqueios operacionais
+ * - ReservationBlockMode: PERIOD (tarde/noite/dia todo) ou SLOTS (horários específicos)
+ * - ReservationBlockPeriod: períodos possíveis
+ */
+enum ReservationBlockMode {
+  PERIOD
+  SLOTS
+}
+
+enum ReservationBlockPeriod {
+  AFTERNOON
+  NIGHT
+  ALL_DAY
+}
+
+/**
+ * ===== Models =====
+ */
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(STAFF)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([email])
+  @@index([role])
+}
+
+model Unit {
+  id        String   @id @default(uuid()) @db.VarChar(36)
+  name      String   @db.VarChar(100)
+  slug      String   @unique @db.VarChar(100)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations Reservation[]
+  areas        Area[]
+  blocks       ReservationBlock[]
+
+  @@index([name])
+  @@index([isActive])
+}
+
+model Area {
+  id       String  @id @default(uuid()) @db.VarChar(36)
+  unitId   String  @db.VarChar(36)
+  unit     Unit    @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  name     String  @db.VarChar(191)
+  photoUrl String?
+  isActive Boolean @default(true)
+
+  iconEmoji          String? @db.VarChar(16) // ex.: "🍺", "🎸", "🪑"
+  description        String? @db.Text
+  capacityAfternoon  Int?
+  capacityNight      Int?
+
+  reservations Reservation[]
+  blocks       ReservationBlock[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([unitId, name], map: "area_unit_name_unique")
+  @@index([unitId, name], map: "area_unit_name_idx")
+  @@index([isActive])
+}
+
+model Reservation {
+  id              String          @id @default(uuid()) @db.VarChar(36)
+  reservationCode String?         @unique @db.VarChar(6)
+  reservationType ReservationType @default(PARTICULAR)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  fullName String  @db.VarChar(200)
+  cpf      String? @db.VarChar(14)
+
+  people Int
+  kids   Int @default(0)
+
+  // LEGADO: nome da área livre (mantido para compat de leitura)
+  area String? @db.VarChar(64)
+
+  // Relação com Area (preferencial)
+  areaId  String? @db.VarChar(36)
+  areaRef Area?   @relation(fields: [areaId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  // Denormalização opcional
+  areaName String? @db.VarChar(100)
+
+  reservationDate DateTime
+  birthdayDate    DateTime?
+
+  phone String? @db.VarChar(32)
+  email String? @db.VarChar(200)
+  notes String? @db.Text
+
+  utm_source   String? @db.VarChar(64)
+  utm_medium   String? @db.VarChar(64)
+  utm_campaign String? @db.VarChar(128)
+  utm_content  String? @db.VarChar(128)
+  utm_term     String? @db.VarChar(128)
+  url          String? @db.VarChar(512)
+  ref          String? @db.VarChar(256)
+
+  // LEGADO (mantido por compatibilidade de leitura):
+  unit String? @db.VarChar(64)
+
+  // Relação com Unit (preferencial)
+  unitId  String? @db.VarChar(36)
+  unitRef Unit?   @relation(fields: [unitId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  source String? @db.VarChar(64)
+
+  status      ReservationStatus @default(AWAITING_CHECKIN)
+  qrToken     String            @unique @db.VarChar(64)
+  qrExpiresAt DateTime?
+  checkedInAt DateTime?
+  checkedInBy String?           @db.VarChar(64)
+
+  /// relação com convidados da reserva
+  guests Guest[]
+
+  @@index([reservationDate])
+  @@index([createdAt])
+  @@index([utm_source, utm_campaign])
+  @@index([status, reservationDate])
+  @@index([unit, createdAt])
+  @@index([status, createdAt])
+  @@index([reservationCode])
+  @@index([unitId, createdAt])
+  @@index([areaId, createdAt])
+}
+
+model Guest {
+  id            String      @id @default(uuid()) @db.VarChar(36)
+  reservationId String      @db.VarChar(36)
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  name  String    @db.VarChar(200)
+  email String    @db.VarChar(200)
+  role  GuestRole @default(GUEST)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([reservationId, email], map: "guest_reservation_email_unique")
+  @@index([reservationId], map: "guest_reservation_idx")
+  @@index([email], map: "guest_email_idx")
+  @@map("guest")
+}
+
+/**
+ * 🔒 Bloqueio operacional de reservas por unidade/área/dia/período/horário
+ * - areaId = NULL  => bloqueia a unidade inteira
+ * - mode = PERIOD  => use "period" (AFTERNOON/NIGHT/ALL_DAY)
+ * - mode = SLOTS   => use "slots" (Json com ["12:00","12:30",...])
+ * Observação: MySQL não tem array escalar, por isso usamos Json para slots.
+ */
+model ReservationBlock {
+  id        String                 @id @default(uuid()) @db.VarChar(36)
+
+  unitId    String                 @db.VarChar(36)
+  unit      Unit                   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  areaId    String?                @db.VarChar(36)
+  area      Area?                  @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  date      DateTime               // normalizado para 00:00:00 do dia (America/Sao_Paulo)
+
+  mode      ReservationBlockMode
+  period    ReservationBlockPeriod? // requerido quando mode = PERIOD
+  slots     Json?                  // requerido quando mode = SLOTS; ex.: ["12:00","12:30","18:00"]
+
+  reason    String?                @db.VarChar(255)
+  createdBy String?                @db.VarChar(64)
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
+
+  @@unique([unitId, areaId, date, mode, period], map: "uniq_block_scope")
+  @@index([unitId, date])
+  @@index([unitId, areaId, date])
+}

@@ -1,0 +1,31 @@
+services:
+  db:
+    image: mysql:8
+    container_name: mane-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: mane_dev
+    ports:
+      - "3306:3306"
+    volumes:
+      - mane_mysql_data:/var/lib/mysql
+    command: ["--default-authentication-plugin=mysql_native_password"]
+
+  api:
+    build:
+      context: ./mane-api
+      dockerfile: Dockerfile
+      # se seu Dockerfile tem multi-stage com alvo "production", defina:
+      # target: production
+    container_name: mane-api
+    env_file:
+      - ./mane-api/.env.docker.local
+    ports:
+      - "4000:4000"
+    depends_on:
+      - db
+    # opcional: reiniciar sempre que cair
+    restart: unless-stopped
+
+volumes:
+  mane_mysql_data:

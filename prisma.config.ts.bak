@@ -1,0 +1,8 @@
+// prisma.config.ts
+import type { Config } from '@prisma/internals';
+
+const config: Config = {
+  schema: 'prisma/schema.prisma',
+};
+
+export default config;
