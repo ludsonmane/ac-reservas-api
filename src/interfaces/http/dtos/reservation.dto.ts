@@ -4,8 +4,8 @@ import { z } from 'zod';
 export const CreateReservationDTO = z.object({
   fullName: z.string().min(3).trim(),
   cpf: z.string().trim().optional().nullable(),
-  people: z.coerce.number().int().min(1).max(20),
-  kids: z.coerce.number().int().min(0).max(20).default(0),
+  people: z.coerce.number().int().min(1).max(40, {message: "Limite máximo de 40 pessoas."}),
+  kids: z.coerce.number().int().min(0).max(30 , {message: "Limite máximo de 30 crianças."}).default(0),
 
   // LEGADO: nome livre da área (mantido por compat)
   area: z.string().trim().optional().nullable(),
@@ -42,7 +42,7 @@ export const UpdateReservationDTO = z.object({
   fullName: z.string().min(1).trim().optional(),
   cpf: z.string().trim().optional().nullable(),
   people: z.number().int().min(1).optional(),
-  kids: z.coerce.number().int().min(0).max(20).optional(),
+  kids: z.coerce.number().int().min(0).optional(),
 
   // LEGADO
   area: z.string().trim().optional().nullable(),
