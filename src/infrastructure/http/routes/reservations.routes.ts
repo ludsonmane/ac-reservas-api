@@ -612,6 +612,76 @@ reservationsRouter.post(
 );
 
 /* =========================================================================
+   ❌ Marcar como NO_SHOW (cliente não compareceu)
+   ========================================================================= */
+reservationsRouter.post(
+  '/:id/noshow',
+  requireAuth,
+  requireRole(['STAFF', 'ADMIN']),
+  async (req: any, res, next) => {
+    try {
+      const { id } = req.params;
+
+      const r = await prisma.reservation.findUnique({ where: { id } });
+      if (!r) return res.status(404).json({ error: 'Reserva não encontrada.' });
+
+      // Já está como NO_SHOW? Permite "desmarcar" voltando para AWAITING_CHECKIN
+      if (r.status === 'NO_SHOW') {
+        const updated = await prisma.reservation.update({
+          where: { id },
+          data: {
+            status: 'AWAITING_CHECKIN',
+          },
+          select: {
+            id: true,
+            reservationCode: true,
+            status: true,
+            checkedInAt: true,
+            fullName: true,
+            phone: true,
+            people: true,
+            kids: true,
+            unitId: true,
+            areaId: true,
+            reservationDate: true,
+          },
+        });
+        return res.json(updated);
+      }
+
+      // Não permite marcar NO_SHOW se já fez check-in
+      if (r.status === 'CHECKED_IN') {
+        return res.status(409).json({ error: 'Reserva já fez check-in, não pode ser marcada como No Show.' });
+      }
+
+      const updated = await prisma.reservation.update({
+        where: { id },
+        data: {
+          status: 'NO_SHOW',
+        },
+        select: {
+          id: true,
+          reservationCode: true,
+          status: true,
+          checkedInAt: true,
+          fullName: true,
+          phone: true,
+          people: true,
+          kids: true,
+          unitId: true,
+          areaId: true,
+          reservationDate: true,
+        },
+      });
+
+      return res.json(updated);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/* =========================================================================
    CRUD (Controller) — com enrich/validate no CREATE/UPDATE
    ========================================================================= */
 reservationsRouter.post(

@@ -19,6 +19,7 @@ enum Role {
 enum ReservationStatus {
   AWAITING_CHECKIN
   CHECKED_IN
+  NO_SHOW
 }
 
 enum GuestRole {
