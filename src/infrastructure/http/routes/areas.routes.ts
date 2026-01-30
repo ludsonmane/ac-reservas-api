@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { prisma } from '../../db/prisma';
 import { requireAuth, requireRole } from '../middlewares/requireAuth';
+import { logFromRequest } from '../../../services/audit/auditLog.service';
 
 export const areasRouter = Router();
 
@@ -139,6 +140,9 @@ areasRouter.post('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
       include: { unit: { select: { id: true, name: true, slug: true } } },
     });
 
+    // 📋 Log de auditoria
+    await logFromRequest(req, 'CREATE', 'Area', created.id, null, { name: created.name, unitId: created.unitId });
+
     res.status(201).json({
       ...created,
       photoUrlAbsolute: toAbsoluteMedia(created.photoUrl),
@@ -172,6 +176,9 @@ areasRouter.get('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) =>
  * ============================================================ */
 async function updateArea(req: any, res: any) {
   const { unitId, name } = req.body || {};
+
+  // Busca estado anterior para log
+  const oldData = await prisma.area.findUnique({ where: { id: String(req.params.id) } });
 
   // capacidades (camel/snake)
   const capAfternoonRaw = req.body?.capacityAfternoon ?? req.body?.capacity_afternoon;
@@ -226,6 +233,10 @@ async function updateArea(req: any, res: any) {
       data,
       include: { unit: { select: { id: true, name: true, slug: true } } },
     });
+
+    // 📋 Log de auditoria
+    await logFromRequest(req, 'UPDATE', 'Area', req.params.id, oldData, data);
+
     res.json({
       ...updated,
       photoUrlAbsolute: toAbsoluteMedia(updated.photoUrl),
@@ -248,6 +259,9 @@ areasRouter.patch('/:id', requireAuth, requireRole(['ADMIN']), updateArea);
 areasRouter.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) => {
   const id = String(req.params.id);
 
+  // Busca estado anterior para log
+  const oldData = await prisma.area.findUnique({ where: { id } });
+
   const rCount = await prisma.reservation.count({ where: { areaId: id } });
   if (rCount > 0) {
     return res.status(409).json({ error: 'Não é possível excluir: existem reservas nesta área' });
@@ -255,6 +269,10 @@ areasRouter.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res)
 
   try {
     await prisma.area.delete({ where: { id } });
+
+    // 📋 Log de auditoria
+    await logFromRequest(req, 'DELETE', 'Area', id, oldData, null);
+
     res.sendStatus(204);
   } catch (e: any) {
     if (String(e?.code) === 'P2025') return res.status(404).json({ error: 'Área não encontrada' });

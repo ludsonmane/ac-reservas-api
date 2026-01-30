@@ -3,6 +3,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { prisma } from '../../db/prisma';
 import { requireAuth, requireRole } from '../middlewares/requireAuth';
+import { logFromRequest } from '../../../services/audit/auditLog.service';
 
 export const usersRouter = Router();
 
@@ -106,6 +107,10 @@ usersRouter.post('/', requireAuth, requireRole(['ADMIN']), async (req, res) => {
         passwordHash,
       },
     });
+
+    // 📋 Log de auditoria
+    await logFromRequest(req, 'CREATE', 'User', created.id, null, { name: created.name, email: created.email, role: uiRole });
+
     res.status(201).json(sanitizeUser(created));
   } catch (e: any) {
     if (String(e?.code) === 'P2002') {
@@ -166,6 +171,12 @@ usersRouter.put('/:id', requireAuth, requireRole(['ADMIN']), async (req, res) =>
     }
 
     const updated = await prisma.user.update({ where: { id }, data });
+
+    // 📋 Log de auditoria (não inclui senha no log)
+    const logData = { ...data };
+    delete logData.passwordHash;
+    await logFromRequest(req, 'UPDATE', 'User', id, null, logData);
+
     res.json(sanitizeUser(updated));
   } catch (e: any) {
     if (e?.status === 409) {
@@ -188,8 +199,15 @@ usersRouter.delete('/:id', requireAuth, requireRole(['ADMIN']), async (req, res)
   }
 
   try {
+    // Busca estado anterior para log
+    const oldData = await prisma.user.findUnique({ where: { id }, select: { id: true, name: true, email: true, role: true } });
+
     await ensureNotLastAdmin(id);
     await prisma.user.delete({ where: { id } });
+
+    // 📋 Log de auditoria
+    await logFromRequest(req, 'DELETE', 'User', id, oldData, null);
+
     res.sendStatus(204);
   } catch (e: any) {
     const status = e?.status || 400;

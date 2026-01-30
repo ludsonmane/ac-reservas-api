@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { prisma } from '../../db/prisma';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middlewares/requireAuth';
+import { logFromRequest } from '../../../services/audit/auditLog.service';
 
 export const unitsRouter = Router();
 
@@ -118,6 +119,9 @@ unitsRouter.post(
         data: { name: data.name, slug, isActive: data.isActive ?? true },
       });
 
+      // 📋 Log de auditoria
+      await logFromRequest(req, 'CREATE', 'Unit', created.id, null, { name: created.name, slug: created.slug });
+
       res.status(201).json(created);
     } catch (e: any) {
       res.status(400).json({ error: 'Invalid payload', details: e?.message });
@@ -133,6 +137,9 @@ unitsRouter.put(
   requireRole(['STAFF', 'ADMIN']),
   async (req, res) => {
     try {
+      // Busca estado anterior para log
+      const oldData = await prisma.unit.findUnique({ where: { id: req.params.id } });
+
       const schema = z.object({
         name: z.string().min(2).optional(),
         slug: z.string().min(2).regex(slugRegex, 'Slug inválido').optional(),
@@ -163,6 +170,9 @@ unitsRouter.put(
         data: patch,
       });
 
+      // 📋 Log de auditoria
+      await logFromRequest(req, 'UPDATE', 'Unit', req.params.id, oldData, patch);
+
       res.json(updated);
     } catch (e: any) {
       if (String(e?.code) === 'P2025') return res.sendStatus(404);
@@ -181,12 +191,19 @@ unitsRouter.delete(
     try {
       const id = req.params.id;
 
+      // Busca estado anterior para log
+      const oldData = await prisma.unit.findUnique({ where: { id } });
+
       const count = await prisma.reservation.count({ where: { unitId: id } });
       if (count > 0) {
         return res.status(409).json({ error: 'Unit has linked reservations' });
       }
 
       await prisma.unit.delete({ where: { id } });
+
+      // 📋 Log de auditoria
+      await logFromRequest(req, 'DELETE', 'Unit', id, oldData, null);
+
       res.sendStatus(204);
     } catch (e: any) {
       if (String(e?.code) === 'P2025') return res.sendStatus(404);
