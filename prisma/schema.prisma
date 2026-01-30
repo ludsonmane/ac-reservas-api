@@ -224,3 +224,31 @@ model ReservationBlock {
   @@index([unitId, date])
   @@index([unitId, areaId, date])
 }
+
+/**
+ * 📋 Audit Log - Registro de todas as ações do sistema
+ */
+model AuditLog {
+  id          String   @id @default(uuid()) @db.VarChar(36)
+  
+  action      String   @db.VarChar(50)    // CREATE, UPDATE, DELETE, CHECKIN, NO_SHOW, etc.
+  entity      String   @db.VarChar(50)    // Reservation, Unit, Area, User, Block
+  entityId    String?  @db.VarChar(36)    // ID do registro afetado
+  
+  userId      String?  @db.VarChar(36)    // Quem fez a ação
+  userName    String?  @db.VarChar(200)   // Nome do usuário (snapshot)
+  userEmail   String?  @db.VarChar(200)   // Email do usuário (snapshot)
+  
+  oldData     Json?                       // Estado anterior (para UPDATE/DELETE)
+  newData     Json?                       // Novo estado (para CREATE/UPDATE)
+  
+  ip          String?  @db.VarChar(45)    // IP do cliente
+  userAgent   String?  @db.VarChar(500)   // User-Agent
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([entity, entityId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}

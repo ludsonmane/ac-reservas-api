@@ -19,6 +19,9 @@ import { requireAuth, requireRole } from '../middlewares/requireAuth';
 // ⬇️ disponibilidade de áreas
 import { areasService } from '../../../modules/areas/areas.service';
 
+// ⬇️ audit log
+import { logFromRequest } from '../../../services/audit/auditLog.service';
+
 export const reservationsRouter = Router();
 
 /* =========================================================================
@@ -557,6 +560,9 @@ reservationsRouter.post(
         },
       });
 
+      // 📋 Log de auditoria
+      await logFromRequest(req, 'CHECKIN', 'Reservation', id, { status: r.status }, { status: updated.status });
+
       return res.json(updated);
     } catch (err) {
       next(err);
@@ -625,6 +631,8 @@ reservationsRouter.post(
       const r = await prisma.reservation.findUnique({ where: { id } });
       if (!r) return res.status(404).json({ error: 'Reserva não encontrada.' });
 
+      const oldStatus = r.status;
+
       // Já está como NO_SHOW? Permite "desmarcar" voltando para AWAITING_CHECKIN
       if (r.status === 'NO_SHOW') {
         const updated = await prisma.reservation.update({
@@ -646,6 +654,8 @@ reservationsRouter.post(
             reservationDate: true,
           },
         });
+        // 📋 Log de auditoria
+        await logFromRequest(req, 'NO_SHOW', 'Reservation', id, { status: oldStatus }, { status: updated.status });
         return res.json(updated);
       }
 
@@ -673,6 +683,9 @@ reservationsRouter.post(
           reservationDate: true,
         },
       });
+
+      // 📋 Log de auditoria
+      await logFromRequest(req, 'NO_SHOW', 'Reservation', id, { status: oldStatus }, { status: updated.status });
 
       return res.json(updated);
     } catch (err) {

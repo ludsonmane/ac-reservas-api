@@ -10,6 +10,7 @@ import { logger } from '../../../config/logger';
 import { sendReservationTicket } from '../../../services/email/sendReservationTicket';
 import { z } from 'zod';
 import { prisma } from '../../../infrastructure/db/prisma';
+import { logFromRequest } from '../../../services/audit/auditLog.service';
 
 /* ===== Helpers ===== */
 function toInt(v: unknown, fb: number): number {
@@ -141,6 +142,9 @@ export class ReservationController {
     const created = await this.createUC.execute(payload as any);
     const c = created as any; // prisma model
 
+    // 📋 Log de auditoria
+    await logFromRequest(req, 'CREATE', 'Reservation', c.id, null, { fullName: c.fullName, people: c.people, reservationDate: c.reservationDate });
+
     // Envia ticket por e-mail sem bloquear a resposta
     try {
       if (c.email) {
@@ -218,6 +222,9 @@ export class ReservationController {
     const parsed = UpdateReservationDTO.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
+    // Busca estado anterior para log
+    const oldData = await prisma.reservation.findUnique({ where: { id: req.params.id } });
+
     const b = parsed.data as Record<string, any>;
     const payload: Record<string, any> = { ...b };
 
@@ -244,12 +251,23 @@ export class ReservationController {
     if (b.areaId !== undefined) payload.areaId = nonEmptyOrNull(b.areaId);
 
     const updated = await this.updateUC.execute(req.params.id, payload as any);
+
+    // 📋 Log de auditoria
+    await logFromRequest(req, 'UPDATE', 'Reservation', req.params.id, oldData, payload);
+
     return res.json(updated);
   };
 
   /* ================== DELETE /v1/reservations/:id ================== */
   delete = async (req: Request, res: Response) => {
+    // Busca estado anterior para log
+    const oldData = await prisma.reservation.findUnique({ where: { id: req.params.id } });
+
     await this.deleteUC.execute(req.params.id);
+
+    // 📋 Log de auditoria
+    await logFromRequest(req, 'DELETE', 'Reservation', req.params.id, oldData, null);
+
     return res.sendStatus(204);
   };
 
