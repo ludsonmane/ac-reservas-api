@@ -26,9 +26,9 @@ async function seedAdmin() {
 
   const passwordHash = await argon2.hash(rawPassword, {
     type: argon2.argon2id,
-    memoryCost: 2 ** 16,
+    memoryCost: 65536,
     timeCost: 3,
-    parallelism: 1,
+    parallelism: 4,
   });
 
   const user = await prisma.user.create({
