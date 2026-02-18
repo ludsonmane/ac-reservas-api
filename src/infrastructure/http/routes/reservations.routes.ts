@@ -157,6 +157,17 @@ async function enrichAndValidate(req: any, res: any, next: any) {
   try {
     const body = req.body || {};
 
+    // ✅ ADMIN pode inserir reservas retroativas e (opcionalmente) ignorar capacidade
+    // - Retroativas: sempre liberado para ADMIN
+    // - Overbooking em qualquer data: somente se enviar adminOverride=true (apenas ADMIN)
+    const role = req.user?.role;
+    const isAdmin = role === 'ADMIN';
+    const adminOverrideFlag =
+      isAdmin &&
+      (body.adminOverride === true ||
+        body.admin_override === true ||
+        String(body.adminOverride || body.admin_override || '').toLowerCase() === 'true');
+
     // normaliza números
     const people = Number(body.people ?? 0);
     const kids = Number(body.kids ?? 0);
@@ -165,6 +176,7 @@ async function enrichAndValidate(req: any, res: any, next: any) {
 
     // data obrigatória para validação de capacidade quando houver área
     const reservationDate: Date | null = body.reservationDate ? new Date(body.reservationDate) : null;
+    const isRetroactive = !!reservationDate && reservationDate.getTime() < Date.now();
 
     // resolve unidade
     const { unitId, unitName } = await resolveUnit({ unitId: body.unitId, unit: body.unit });
@@ -180,7 +192,9 @@ async function enrichAndValidate(req: any, res: any, next: any) {
     if (!body.area && areaName) body.area = areaName;
 
     // valida capacidade se tivermos área + data
-    if (areaId && reservationDate) {
+    // 🔓 ADMIN: libera retroativas automaticamente; e pode forçar overbooking com adminOverride=true
+    const shouldSkipCapacityValidation = isAdmin && (isRetroactive || adminOverrideFlag);
+    if (areaId && reservationDate && !shouldSkipCapacityValidation) {
       const ymd = toYMD(reservationDate);
       const hhmm = toHHmm(reservationDate); // valida por período
 
@@ -252,6 +266,10 @@ function sanitizeStaffBody(req: any, _res: any, next: any) {
       delete req.body.source;
       delete req.body.utmSource;
       delete req.body.utmCampaign;
+
+      // 🔒 Apenas ADMIN pode solicitar bypass de capacidade/retroativas
+      delete req.body.adminOverride;
+      delete req.body.admin_override;
     }
   }
   next();
