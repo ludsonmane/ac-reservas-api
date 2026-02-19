@@ -175,7 +175,8 @@ export class ReservationController {
       logger.warn({ err, id: c.id }, '[email] falha ao enviar ticket (segue 201)');
     }
 
-    return res.status(201).json(created);
+    const meta = (req as any).overbookingMeta ? { overbooking: (req as any).overbookingMeta } : undefined;
+    return res.status(201).json(meta ? { ...created, meta } : created);
   };
 
   /* ================== GET /v1/reservations ================== */
@@ -255,7 +256,8 @@ export class ReservationController {
     // 📋 Log de auditoria
     await logFromRequest(req, 'UPDATE', 'Reservation', req.params.id, oldData, payload);
 
-    return res.json(updated);
+    const meta = (req as any).overbookingMeta ? { overbooking: (req as any).overbookingMeta } : undefined;
+    return res.json(meta ? { ...updated, meta } : updated);
   };
 
   /* ================== DELETE /v1/reservations/:id ================== */

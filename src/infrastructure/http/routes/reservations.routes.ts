@@ -247,6 +247,65 @@ async function enrichAndValidate(req: any, res: any, next: any) {
       }
     }
 
+    // ✅ Se pulamos a validação (overbooking/retroativa), ainda calculamos a situação
+    // para conseguirmos avisar no retorno se houve overbooking de fato.
+    if (areaId && reservationDate && shouldSkipCapacityValidation) {
+      try {
+        const ymd = toYMD(reservationDate);
+        const hhmm = toHHmm(reservationDate);
+        const list = await areasService.listByUnitPublic(String(unitId), ymd, hhmm);
+        const found = list.find((a: any) => a.id === areaId);
+        if (found) {
+          const totalNovo = Number(body.people) + Number(body.kids || 0);
+          const available = Number(found.available ?? found.remaining ?? 0);
+
+          let creditoAtual = 0;
+          const isUpdate = req.method === 'PUT' && req.params?.id;
+          if (isUpdate) {
+            const prev = await prisma.reservation.findUnique({ where: { id: String(req.params.id) } });
+            if (prev) {
+              const sameArea = String(prev.areaId || '') === String(areaId || '');
+              const sameUnit = String(prev.unitId || '') === String(unitId || '');
+              const sameDay = toYMD(prev.reservationDate) === ymd;
+              const samePeriod = toHHmm(prev.reservationDate) === hhmm;
+              if (sameUnit && sameArea && sameDay && samePeriod) {
+                creditoAtual = Number(prev.people || 0) + Number(prev.kids || 0);
+              }
+            }
+          }
+
+          const limit = available + creditoAtual;
+          if (totalNovo > limit) {
+            (req as any).overbookingMeta = {
+              enabled: true,
+              limit,
+              requested: totalNovo,
+              exceededBy: totalNovo - limit,
+              areaId,
+              unitId,
+              day: ymd,
+              period: hhmm,
+              reason: isRetroactive ? 'RETROACTIVE' : 'OVERRIDE',
+            };
+          } else {
+            (req as any).overbookingMeta = {
+              enabled: false,
+              limit,
+              requested: totalNovo,
+              exceededBy: 0,
+              areaId,
+              unitId,
+              day: ymd,
+              period: hhmm,
+              reason: isRetroactive ? 'RETROACTIVE' : 'OVERRIDE',
+            };
+          }
+        }
+      } catch {
+        // se falhar o cálculo, seguimos sem meta
+      }
+    }
+
     req.body = body;
     next();
   } catch (e: any) {

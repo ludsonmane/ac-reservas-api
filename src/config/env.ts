@@ -14,7 +14,8 @@ const envSchema = z.object({
 
   // Auth (JWT)
   JWT_SECRET: z.string().min(16, 'JWT_SECRET muito curto — use 16+ caracteres'),
-  JWT_EXPIRES_IN: z.string().default('15m'),
+  // Mantém login por 24h (pode sobrescrever via env JWT_EXPIRES_IN)
+  JWT_EXPIRES_IN: z.string().default('24h'),
 
   JWT_REFRESH_SECRET: z.string().min(16),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
