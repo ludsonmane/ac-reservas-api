@@ -5,6 +5,8 @@ import { z } from 'zod';
 import utc from 'dayjs/plugin/utc';
 import { prisma } from '../../db/client';
 import { areasService } from '../../../modules/areas/areas.service';
+import { notifyN8nNewContact } from '../../../services/n8n';
+
 import {
   ReservationType,
   ReservationBlockMode,
@@ -345,7 +347,7 @@ router.post('/', async (req, res) => {
 
     // 2) se passou do bloqueio, segue o fluxo normal de capacidade
     const { from, to } = periodWindow(dt);
-    
+
     const maxPeriod =
       getPeriodFromDate(dt) === 'AFTERNOON'
         ? (area.capacityAfternoon ?? 0)
@@ -424,6 +426,46 @@ router.post('/', async (req, res) => {
         reservationType: rType,
       },
       select: { id: true, reservationCode: true, status: true, reservationType: true },
+    });
+
+    notifyN8nNewContact({
+      type: 'reservation_created',
+
+      // contato
+      name: String(fullName),
+      email: emailNorm ?? '',
+      phone: phoneNorm ?? null,
+      cpf: cpf ? String(cpf) : null,
+
+      // contexto
+      store: unit?.name ?? null,
+      unitId: unit?.id ?? null,
+      areaId: area?.id ?? null,
+      areaName: area?.name ?? null,
+
+      // reserva
+      reservationId: created.id,
+      reservationCode: created.reservationCode,
+      reservationType: created.reservationType,
+      reservationDate: dt.toISOString(),
+      people: Math.max(0, Math.floor(peopleNum)),
+      kids: Math.max(0, Math.floor(kidsNum)),
+
+      // origem
+      source: source ?? 'site',
+      url: url ?? null,
+      ref: ref ?? null,
+
+      // utm
+      utm: {
+        utm_source: utm_source_f,
+        utm_medium: utm_medium_f,
+        utm_campaign: utm_campaign_f,
+        utm_content: utm_content_f,
+        utm_term: utm_term_f,
+      },
+
+      role: 'HOST',
     });
 
     return res.status(201).json(created);
