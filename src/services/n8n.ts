@@ -1,21 +1,19 @@
 // src/services/n8n.ts
-// src/services/n8n.ts
-export type N8NContactPayload = {
-  type?: 'reservation_created' | 'guest_added' | string;
+import axios from 'axios';
 
-  // contato
+export type N8NContactPayload = {
+  type?: string;
+
   name: string;
   email: string | null;
   phone?: string | null;
   cpf?: string | null;
 
-  // contexto
   store?: string | null;
   unitId?: string | null;
   areaId?: string | null;
   areaName?: string | null;
 
-  // reserva
   reservationId?: string | null;
   reservationCode?: string | null;
   reservationType?: string | null;
@@ -23,12 +21,10 @@ export type N8NContactPayload = {
   people?: number | null;
   kids?: number | null;
 
-  // origem
   source: string;
   url?: string | null;
   ref?: string | null;
 
-  // utm
   utm?: {
     utm_source?: string | null;
     utm_medium?: string | null;
@@ -40,28 +36,47 @@ export type N8NContactPayload = {
   role?: 'HOST' | 'GUEST';
 };
 
+function safeJsonPreview(obj: any, max = 400) {
+  try {
+    const s = JSON.stringify(obj);
+    return s.length > max ? s.slice(0, max) + '...' : s;
+  } catch {
+    return '[unserializable]';
+  }
+}
 
-export async function notifyN8nNewContact(payload: N8NContactPayload) {
+export function notifyN8nNewContact(payload: N8NContactPayload) {
   const url = process.env.N8N_NEW_CONTACT_WEBHOOK_URL;
-  if (!url) return;
 
-  // Não travar a resposta da API: fire-and-forget
-  setImmediate(async () => {
+  if (!url) {
+    console.warn('[n8n] missing env N8N_NEW_CONTACT_WEBHOOK_URL');
+    return;
+  }
+
+  // fire-and-forget (não bloquear reserva)
+  void (async () => {
     try {
-      await fetch(url, {
-        method: 'POST',
+      const apiKey = process.env.N8N_WEBHOOK_API_KEY;
+
+      const resp = await axios.post(url, payload, {
         headers: {
           'content-type': 'application/json',
-          // opcional: proteção simples no webhook do n8n
-          ...(process.env.N8N_WEBHOOK_API_KEY
-            ? { 'x-api-key': process.env.N8N_WEBHOOK_API_KEY }
-            : {}),
+          ...(apiKey ? { 'x-api-key': apiKey } : {}),
         },
-        body: JSON.stringify(payload),
+        timeout: 8000,
+        // não jogar exception por status != 2xx, a gente loga
+        validateStatus: () => true,
       });
-    } catch (e) {
-      // não estoura erro pro cliente, só loga
-      console.error('[n8n webhook] failed', e);
+
+      if (resp.status < 200 || resp.status >= 300) {
+        console.warn(
+          `[n8n] webhook non-2xx status=${resp.status} body=${safeJsonPreview(resp.data)}`
+        );
+      } else {
+        console.log(`[n8n] webhook ok status=${resp.status}`);
+      }
+    } catch (err: any) {
+      console.error('[n8n] webhook request failed:', err?.message || err);
     }
-  });
+  })();
 }

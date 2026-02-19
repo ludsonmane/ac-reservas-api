@@ -433,7 +433,7 @@ router.post('/', async (req, res) => {
 
       // contato
       name: String(fullName),
-      email: emailNorm ?? '',
+      email: emailNorm ?? null,
       phone: phoneNorm ?? null,
       cpf: cpf ? String(cpf) : null,
 
