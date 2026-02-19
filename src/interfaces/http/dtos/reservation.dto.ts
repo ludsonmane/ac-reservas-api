@@ -20,6 +20,7 @@ export const CreateReservationDTO = z.object({
 
   email: z.string().email().trim().optional().nullable(),
   phone: z.string().trim().optional().nullable(),
+  tables: z.string().trim().optional().nullable(),
   notes: z.string().trim().optional().nullable(),
 
   utm_source: z.string().trim().optional().nullable(),
@@ -56,6 +57,7 @@ export const UpdateReservationDTO = z.object({
   birthdayDate: z.coerce.date().optional().nullable(),
 
   phone: z.string().trim().optional().nullable(),
+  tables: z.string().trim().optional().nullable(),
   email: z.string().email().trim().optional().nullable(),
   notes: z.string().trim().optional().nullable(),
 

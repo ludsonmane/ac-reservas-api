@@ -101,6 +101,7 @@ export class PrismaReservationRepository implements ReservationRepository {
       notes: data?.notes ?? null,
       email: data?.email ?? null,
       phone: data?.phone ?? null,
+      tables: (data as any)?.tables ?? null,
       source: data?.source ?? 'site',
 
       // UTM
@@ -169,6 +170,7 @@ export class PrismaReservationRepository implements ReservationRepository {
           birthdayDate: true,
           phone: true,
           email: true,
+        tables: true,
           unit: true,       // legado (slug/nome)
           unitId: true,     // novo (ID)
           area: true,       // legado
@@ -256,6 +258,7 @@ export class PrismaReservationRepository implements ReservationRepository {
           birthdayDate: true,
           phone: true,
           email: true,
+        tables: true,
           reservationType: true,
           unit: true,       // legado
           unitId: true,     // novo
@@ -292,6 +295,7 @@ export class PrismaReservationRepository implements ReservationRepository {
         birthdayDate: true,
         phone: true,
         email: true,
+        tables: true,
         notes: true,
         utm_source: true,
         utm_medium: true,
@@ -331,6 +335,7 @@ export class PrismaReservationRepository implements ReservationRepository {
         birthdayDate: true,
         phone: true,
         email: true,
+        tables: true,
         notes: true,
         utm_source: true,
         utm_medium: true,

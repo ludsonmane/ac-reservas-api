@@ -94,7 +94,7 @@ function buildHtml(
           <tr><td style="padding:8px 0;color:#334155;"><strong>Data e hora:</strong></td><td style="padding:8px 0;">${dateFmt}</td></tr>
           <tr><td style="padding:8px 0;color:#334155;"><strong>Pessoas:</strong></td><td style="padding:8px 0;">${ticket.people}</td></tr>
           ${ticket.kids && ticket.kids > 0 ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Crianças:</strong></td><td style="padding:8px 0;">${ticket.kids}</td></tr>` : ``}
-          ${ticket.table ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Mesa:</strong></td><td style="padding:8px 0;">${ticket.table}</td></tr>` : ``}
+          ${(() => { const t = (ticket as any).tables ?? (ticket as any).table; return t ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Mesa(s):</strong></td><td style="padding:8px 0;">${t}</td></tr>` : ``; })()}
           ${ticket.phone ? `<tr><td style="padding:8px 0;color:#334155;"><strong>Telefone:</strong></td><td style="padding:8px 0;">${phoneFmt}</td></tr>` : ``}
           ${ticket.notes ? `<tr><td style="padding:8px 0;vertical-align:top;color:#334155;"><strong>Observações:</strong></td><td style="padding:8px 0;">${ticket.notes}</td></tr>` : ``}
         </table>
@@ -175,7 +175,7 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
     `Data/hora: ${new Date(ticket.reservationDate).toLocaleString('pt-BR')}`,
     `Pessoas: ${ticket.people}`,
     ticket.kids && ticket.kids > 0 ? `Crianças: ${ticket.kids}` : '',
-    ticket.table ? `Mesa: ${ticket.table}` : '',
+
     ticket.phone ? `Telefone: ${formatPhoneBR(ticket.phone)}` : '',
     ticket.notes ? `Obs: ${ticket.notes}` : '',
     `Consultar: ${consultUrl}`,

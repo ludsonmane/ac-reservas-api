@@ -136,6 +136,8 @@ model Reservation {
 
   phone String? @db.VarChar(32)
   email String? @db.VarChar(200)
+  // CSV de mesas vinculadas (ex.: "321,322,323")
+  tables String? @db.VarChar(512)
   notes String? @db.Text
 
   utm_source   String? @db.VarChar(64)
