@@ -31,6 +31,7 @@ const reservationSchema = z.object({
   kids: z.number().int().nonnegative().optional(),
   unit: z.string(),
   table: z.string().optional(),
+  tables: z.string().optional(),
   reservationDate: z.string(), // ISO
   notes: z.string().optional(),
   checkinUrl: z.string().url(),
@@ -169,13 +170,23 @@ export async function sendReservationTicket(ticketInput: ReservationTicket) {
     codeTxt
   );
 
+  const tablesRaw = (ticket as any).tables ?? (ticket as any).table ?? '';
+  const tablesLabel = String(tablesRaw || '').trim()
+    ? String(tablesRaw)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => (s.length === 1 || s.length === 2 || s.length === 3) ? s.padStart(3, '0') : s)
+        .join(', ')
+    : '';
+
   const text = [
     `Sua reserva foi confirmada — ${toTitle(ticket.unit)}`,
     `Código: ${codeTxt}`,
     `Data/hora: ${new Date(ticket.reservationDate).toLocaleString('pt-BR')}`,
     `Pessoas: ${ticket.people}`,
     ticket.kids && ticket.kids > 0 ? `Crianças: ${ticket.kids}` : '',
-
+    tablesLabel ? `Mesa(s): ${tablesLabel}` : '',
     ticket.phone ? `Telefone: ${formatPhoneBR(ticket.phone)}` : '',
     ticket.notes ? `Obs: ${ticket.notes}` : '',
     `Consultar: ${consultUrl}`,
