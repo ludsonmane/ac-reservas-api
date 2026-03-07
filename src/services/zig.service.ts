@@ -298,7 +298,6 @@ export async function getZigBillingForReservation(
   const d      = typeof date === 'string' ? new Date(date) : date;
   const ymd    = d.toISOString().slice(0, 10);
   const period = getPeriod(d);
-  const bounds = periodBounds(period);
 
   // Para jantar, busca também o dia seguinte (transações até 01:00)
   const dtfim = period === 'NIGHT'
