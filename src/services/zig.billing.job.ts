@@ -43,7 +43,7 @@ export async function processZigBillingForPeriod(
       reservationDate: { gte: startOfDay, lte: endOfDay },
       tables:          { not: null },
       zigBillingCents: null,
-      status:          { in: ['CHECKED_IN', 'AWAITING_CHECKIN'] },
+      status:          'CHECKED_IN',
     },
     select: {
       id:              true,

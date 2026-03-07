@@ -47,7 +47,7 @@ async function main() {
   const where: any = {
     tables:          { not: null },
     zigBillingCents: null,
-    status:          { in: ['CHECKED_IN', 'AWAITING_CHECKIN'] },
+    status:          'CHECKED_IN',
   };
 
   if (!allTime) {
