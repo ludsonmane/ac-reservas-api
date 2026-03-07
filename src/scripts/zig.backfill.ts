@@ -94,7 +94,6 @@ async function main() {
 
       if (dryRun) {
         log(`${prefix} → DRY-RUN: ${billing.totalValueBRL} (${billing.transactions.length} tx, período: ${billing.period})`);
-        ok++;
       } else {
         await prisma.reservation.update({
           where: { id: r.id },
@@ -104,25 +103,12 @@ async function main() {
           },
         });
         log(`✅ ${prefix} → ${billing.totalValueBRL} (${billing.transactions.length} tx, período: ${billing.period})`);
-        ok++;
       }
+      ok++;
 
     } catch (err: any) {
-      // Se a ZIG retornou 0 transações (não é erro, mesa não encontrada)
-      if (err?.message?.includes('ZIG_EMPTY') || billing_was_zero(err)) {
-        log(`⚠️  ${prefix} → sem transações na ZIG (mesa não encontrada ou período sem vendas)`);
-        if (!dryRun) {
-          // Salva como 0 pra não tentar de novo
-          await prisma.reservation.update({
-            where: { id: r.id },
-            data:  { zigBillingCents: 0, zigBilledAt: new Date() },
-          });
-        }
-        skipped++;
-      } else {
-        console.error(`❌ ${prefix} → ERRO: ${err?.message || err}`);
-        errors++;
-      }
+      console.error(`❌ ${prefix} → ERRO: ${err?.message || err}`);
+      errors++;
     }
 
     // Pausa entre chamadas pra não sobrecarregar a ZIG (sem rate limit documentado)
@@ -139,11 +125,6 @@ async function main() {
   await prisma.$disconnect();
 }
 
-function billing_was_zero(err: any): boolean {
-  // getZigBillingForReservation nunca lança pra 0 resultados — retorna totalValueCents = 0
-  // então esse caso não vai acontecer, mas deixo o guard por segurança
-  return false;
-}
 
 main().catch(async (err) => {
   console.error('[backfill] Erro fatal:', err);
