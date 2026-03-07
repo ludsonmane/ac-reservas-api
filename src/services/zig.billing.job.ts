@@ -1,21 +1,18 @@
 /**
  * src/services/zig.billing.job.ts
  *
- * Job agendado que busca automaticamente o faturamento ZIG
- * para as reservas do dia e salva no banco.
+ * Scheduler de faturamento ZIG — sem dependências externas.
+ * Usa setTimeout nativo do Node para agendar os jobs.
  *
- * Horários:
+ * Horários (America/Sao_Paulo):
  *   16:00 → processa reservas AFTERNOON (almoço) do dia atual
  *   01:00 → processa reservas NIGHT (jantar) do dia anterior
- *
- * Requisitos: ZIG_TOKEN + ZIG_LOJA_MAP configurados no Railway.
  */
 
-import cron from 'node-cron';
 import { prisma } from '../infrastructure/db/prisma';
 import { getZigBillingForReservation, getPeriod } from './zig.service';
 
-// ─── Logger simples ───────────────────────────────────────────────────────────
+// ─── Logger ───────────────────────────────────────────────────────────────────
 
 function log(msg: string, ...args: any[]) {
   console.log(`[zig-job] ${new Date().toISOString()} ${msg}`, ...args);
@@ -26,14 +23,6 @@ function logErr(msg: string, err: any) {
 
 // ─── Lógica principal ─────────────────────────────────────────────────────────
 
-/**
- * Busca todas as reservas do período informado na data informada,
- * que tenham mesas vinculadas e ainda não tenham faturamento salvo,
- * e salva o resultado no banco uma a uma.
- *
- * @param targetDate  Data das reservas a processar (Date)
- * @param period      'AFTERNOON' | 'NIGHT'
- */
 export async function processZigBillingForPeriod(
   targetDate: Date,
   period: 'AFTERNOON' | 'NIGHT',
@@ -43,41 +32,32 @@ export async function processZigBillingForPeriod(
     return { processed: 0, errors: 0 };
   }
 
-  const ymd        = targetDate.toISOString().slice(0, 10); // YYYY-MM-DD
+  const ymd        = targetDate.toISOString().slice(0, 10);
   const startOfDay = new Date(`${ymd}T00:00:00.000Z`);
   const endOfDay   = new Date(`${ymd}T23:59:59.999Z`);
 
-  // Corte de horário para filtrar reservas pelo período
-  // AFTERNOON: 00:00–17:29  |  NIGHT: 17:30–23:59
-  const cutoffHour   = 17;
-  const cutoffMinute = 30;
+  log(`Iniciando — data: ${ymd}, período: ${period}`);
 
-  log(`Iniciando processamento — data: ${ymd}, período: ${period}`);
-
-  // Busca reservas do dia com mesas vinculadas e sem faturamento ZIG ainda
   const reservations = await prisma.reservation.findMany({
     where: {
       reservationDate: { gte: startOfDay, lte: endOfDay },
       tables:          { not: null },
-      zigBillingCents: null,                  // ainda não processado
+      zigBillingCents: null,
       status:          { in: ['CHECKED_IN', 'AWAITING_CHECKIN'] },
     },
     select: {
       id:              true,
       tables:          true,
       reservationDate: true,
-      unitId:          true,
       unitRef:         { select: { slug: true } },
     },
   });
 
-  // Filtra só as reservas do período correto pelo horário
-  const filtered = reservations.filter((r) => {
-    const p = getPeriod(new Date(r.reservationDate));
-    return p === period;
-  });
+  const filtered = reservations.filter(
+    (r) => getPeriod(new Date(r.reservationDate)) === period,
+  );
 
-  log(`Reservas encontradas: ${reservations.length} total, ${filtered.length} no período ${period}`);
+  log(`${reservations.length} reservas no dia, ${filtered.length} no período ${period}`);
 
   let processed = 0;
   let errors    = 0;
@@ -92,20 +72,16 @@ export async function processZigBillingForPeriod(
 
       await prisma.reservation.update({
         where: { id: r.id },
-        data: {
-          zigBillingCents: billing.totalValueCents,
-          zigBilledAt:     new Date(),
-        },
+        data:  { zigBillingCents: billing.totalValueCents, zigBilledAt: new Date() },
       });
 
-      log(`✅ ${r.id} → ${billing.totalValueBRL} (${billing.transactions.length} transações)`);
+      log(`✅ ${r.id} → ${billing.totalValueBRL} (${billing.transactions.length} tx)`);
       processed++;
 
-      // Pequena pausa entre chamadas pra não sobrecarregar a ZIG
+      // Pausa para não sobrecarregar a ZIG
       await new Promise((res) => setTimeout(res, 300));
-
     } catch (err: any) {
-      logErr(`❌ ${r.id} → erro:`, err);
+      logErr(`❌ ${r.id}`, err);
       errors++;
     }
   }
@@ -114,34 +90,74 @@ export async function processZigBillingForPeriod(
   return { processed, errors };
 }
 
-// ─── Registro dos jobs cron ──────────────────────────────────────────────────
+// ─── Scheduler nativo (sem node-cron) ────────────────────────────────────────
+
+/**
+ * Calcula quantos ms faltam até o próximo HH:MM no fuso America/Sao_Paulo.
+ * Se o horário já passou hoje, agenda para amanhã.
+ */
+function msUntilNext(hour: number, minute: number): number {
+  // Obtém a hora atual em São Paulo
+  const nowStr = new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' });
+  const now    = new Date(nowStr);
+
+  const target = new Date(now);
+  target.setHours(hour, minute, 0, 0);
+
+  if (target <= now) {
+    target.setDate(target.getDate() + 1); // já passou → próximo dia
+  }
+
+  return target.getTime() - now.getTime();
+}
+
+/**
+ * Agenda um job recorrente para rodar todos os dias em HH:MM (horário de SP).
+ * Usa setTimeout recursivo para se manter alinhado ao horário correto.
+ */
+function scheduleDailyAt(hour: number, minute: number, job: () => Promise<void>) {
+  const label = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+  function scheduleNext() {
+    const ms = msUntilNext(hour, minute);
+    log(`Próximo job ${label} em ${Math.round(ms / 60000)} min`);
+    setTimeout(async () => {
+      try {
+        await job();
+      } catch (err) {
+        logErr(`Job ${label} falhou:`, err);
+      }
+      scheduleNext(); // reagenda para o próximo dia
+    }, ms);
+  }
+
+  scheduleNext();
+}
+
+// ─── Registro ─────────────────────────────────────────────────────────────────
 
 export function startZigBillingJobs() {
   if (!process.env.ZIG_TOKEN) {
-    console.log('[zig-job] ZIG_TOKEN não configurado — jobs não registrados.');
+    console.log('[zig-job] ZIG_TOKEN não configurado — jobs não iniciados.');
     return;
   }
 
-  /**
-   * 16:00 — processa almoços do dia atual
-   * Cron: "0 16 * * *"  (América/São Paulo via TZ no Railway)
-   */
-  cron.schedule('0 16 * * *', async () => {
-    log('⏰ Disparando job AFTERNOON (almoço)...');
-    const today = new Date();
-    await processZigBillingForPeriod(today, 'AFTERNOON');
-  }, { timezone: 'America/Sao_Paulo' });
+  // 16:00 → almoço do dia ANTERIOR
+  // (mesas são preenchidas manualmente, então só processamos no dia seguinte)
+  scheduleDailyAt(16, 0, async () => {
+    log('⏰ Disparando job AFTERNOON (almoço do dia anterior)...');
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    await processZigBillingForPeriod(yesterday, 'AFTERNOON');
+  });
 
-  /**
-   * 01:00 — processa jantares do dia ANTERIOR
-   * Cron: "0 1 * * *"  (América/São Paulo)
-   */
-  cron.schedule('0 1 * * *', async () => {
-    log('⏰ Disparando job NIGHT (jantar)...');
+  // 01:00 → jantar do dia ANTERIOR
+  scheduleDailyAt(1, 0, async () => {
+    log('⏰ Disparando job NIGHT (jantar do dia anterior)...');
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     await processZigBillingForPeriod(yesterday, 'NIGHT');
-  }, { timezone: 'America/Sao_Paulo' });
+  });
 
-  console.log('[zig-job] Jobs registrados: AFTERNOON (16:00) e NIGHT (01:00) — fuso: America/Sao_Paulo');
+  console.log('[zig-job] Jobs agendados: AFTERNOON (16:00 D+1) e NIGHT (01:00 D+1) — fuso: America/Sao_Paulo');
 }
