@@ -25,6 +25,8 @@
   "exclude": [
     "node_modules",
     "dist",
-    "src/application/services/BlockService.ts"
+    "src/application/services/BlockService.ts",
+    "src/ui",
+    "src/main.tsx"
   ]
 }
