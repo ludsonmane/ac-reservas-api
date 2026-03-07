@@ -170,7 +170,9 @@ export class PrismaReservationRepository implements ReservationRepository {
           birthdayDate: true,
           phone: true,
           email: true,
-        tables: true,
+          tables: true,
+          zigBillingCents: true,
+          zigBilledAt: true,
           unit: true,       // legado (slug/nome)
           unitId: true,     // novo (ID)
           area: true,       // legado
@@ -258,7 +260,9 @@ export class PrismaReservationRepository implements ReservationRepository {
           birthdayDate: true,
           phone: true,
           email: true,
-        tables: true,
+          tables: true,
+          zigBillingCents: true,
+          zigBilledAt: true,
           reservationType: true,
           unit: true,       // legado
           unitId: true,     // novo

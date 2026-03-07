@@ -2,13 +2,7 @@
  * src/infrastructure/http/routes/zig.billing.routes.ts
  *
  * GET /v1/zig/billing/:reservationId
- *
- * Resolve automaticamente o lojaId ZIG correto a partir da unidade da reserva,
- * usando o mapa configurado em ZIG_LOJA_MAP no Railway.
- *
- * Railway env:
- *   ZIG_TOKEN=<token>
- *   ZIG_LOJA_MAP={"bsb":"111","aguas-claras":"222"}
+ * Busca faturamento ZIG pelas mesas da reserva e salva no banco.
  */
 
 import { Router } from 'express';
@@ -18,20 +12,6 @@ import { getZigBillingForReservation } from '../../../services/zig.service';
 
 export const zigBillingRouter = Router();
 
-/**
- * GET /v1/zig/billing/:reservationId
- *
- * Query params opcionais:
- *   lojaId  — override manual do lojaId ZIG (ignora ZIG_LOJA_MAP)
- *
- * Resposta:
- * {
- *   reservationId, reservationName, unitSlug,
- *   tables, totalValueCents, totalValueBRL,
- *   byTable: [{ table, totalCents, transactions }],
- *   date, lojaId
- * }
- */
 zigBillingRouter.get(
   '/billing/:reservationId',
   requireAuth,
@@ -41,7 +21,7 @@ zigBillingRouter.get(
       const { reservationId } = req.params;
       const lojaOverride      = req.query.lojaId ? String(req.query.lojaId) : undefined;
 
-      // 1. Busca reserva + slug da unidade
+      // 1. Busca reserva
       const reservation = await prisma.reservation.findUnique({
         where:  { id: reservationId },
         select: {
@@ -50,9 +30,7 @@ zigBillingRouter.get(
           tables:          true,
           reservationDate: true,
           unitId:          true,
-          unitRef: {
-            select: { slug: true, name: true },
-          },
+          unitRef: { select: { slug: true, name: true } },
         },
       });
 
@@ -62,17 +40,15 @@ zigBillingRouter.get(
         });
       }
 
-      // 2. Valida mesas
       if (!reservation.tables?.trim()) {
         return res.status(422).json({
           error: {
             code:    'NO_TABLES',
-            message: 'Esta reserva não possui mesas vinculadas. Vincule as mesas antes de consultar o faturamento ZIG.',
+            message: 'Esta reserva não possui mesas vinculadas.',
           },
         });
       }
 
-      // 3. Valida configuração mínima
       if (!process.env.ZIG_TOKEN) {
         return res.status(503).json({
           error: {
@@ -82,10 +58,9 @@ zigBillingRouter.get(
         });
       }
 
-      // 4. Slug da unidade para resolver lojaId no mapa
       const unitSlug = reservation.unitRef?.slug ?? null;
 
-      // 5. Busca faturamento
+      // 2. Busca faturamento na ZIG
       const billing = await getZigBillingForReservation(
         reservation.tables,
         reservation.reservationDate,
@@ -93,7 +68,15 @@ zigBillingRouter.get(
         lojaOverride,
       );
 
-      // 6. Responde
+      // 3. Salva no banco (mesmo que seja R$ 0,00 — registra que foi consultado)
+      await prisma.reservation.update({
+        where: { id: reservationId },
+        data: {
+          zigBillingCents: billing.totalValueCents,
+          zigBilledAt:     new Date(),
+        },
+      });
+
       return res.json({
         reservationId:   reservation.id,
         reservationName: reservation.fullName,

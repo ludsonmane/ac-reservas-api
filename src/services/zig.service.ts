@@ -122,8 +122,9 @@ export type ZigBillingResult = {
     totalCents:   number;
     transactions: ZigSaidaProduto[];
   }[];
-  date:    string;
-  lojaId:  string;
+  date:     string;
+  period:   ReservationPeriod;  // AFTERNOON (almoço) ou NIGHT (jantar)
+  lojaId:   string;
   unitSlug?: string;
 };
 
@@ -210,15 +211,76 @@ function matchTransactionToTable(tx: ZigSaidaProduto, tables: string[]): string 
   return null;
 }
 
+// ─── Período da reserva ──────────────────────────────────────────────────────
+
+/**
+ * Cortes de período:
+ *   AFTERNOON (almoço) → reserva antes das 17:30 → transações ZIG entre 12:00 e 15:00
+ *   NIGHT     (jantar) → reserva 17:30 em diante  → transações ZIG entre 17:30 e 01:00 (dia seguinte)
+ */
+const EVENING_CUTOFF_HOUR   = 17;
+const EVENING_CUTOFF_MINUTE = 30;
+
+export type ReservationPeriod = 'AFTERNOON' | 'NIGHT';
+
+export function getPeriod(date: Date): ReservationPeriod {
+  const h = date.getHours();
+  const m = date.getMinutes();
+  const totalMin = h * 60 + m;
+  return totalMin >= EVENING_CUTOFF_HOUR * 60 + EVENING_CUTOFF_MINUTE ? 'NIGHT' : 'AFTERNOON';
+}
+
+/**
+ * Filtra uma transação ZIG pelo período da reserva.
+ *
+ * AFTERNOON: 12:00–15:00 (mesmo dia)
+ * NIGHT:     17:30–23:59 (mesmo dia) + 00:00–01:00 (dia seguinte)
+ *
+ * Para o jantar que vai até 01:00, buscamos saída-produtos em dois dias
+ * (dia da reserva + dia seguinte) e filtramos pelo horário.
+ */
+function txInPeriod(transactionDate: string, reservationYmd: string, period: ReservationPeriod): boolean {
+  try {
+    const tx = new Date(transactionDate);
+    const txYmd = tx.toISOString().slice(0, 10);
+    const txMin = tx.getHours() * 60 + tx.getMinutes();
+
+    if (period === 'AFTERNOON') {
+      // só mesmo dia, entre 12:00 e 15:00
+      return txYmd === reservationYmd && txMin >= 12 * 60 && txMin <= 15 * 60;
+    }
+
+    // NIGHT: mesmo dia 17:30–23:59 OU dia seguinte 00:00–01:00
+    const nextDay = new Date(reservationYmd + 'T00:00:00');
+    nextDay.setDate(nextDay.getDate() + 1);
+    const nextYmd = nextDay.toISOString().slice(0, 10);
+
+    if (txYmd === reservationYmd) {
+      return txMin >= 17 * 60 + 30; // 17:30 em diante
+    }
+    if (txYmd === nextYmd) {
+      return txMin <= 1 * 60; // até 01:00 do dia seguinte
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 // ─── Função principal ─────────────────────────────────────────────────────────
 
 /**
- * Retorna o faturamento ZIG para as mesas de uma reserva.
+ * Retorna o faturamento ZIG para as mesas de uma reserva,
+ * filtrado pelo PERÍODO da reserva (almoço ou jantar).
  *
- * @param tablesCsv  CSV de mesas (ex.: "321,322,323")
- * @param date       Data da reserva
- * @param unitSlug   Slug da unidade — usado para resolver o lojaId correto no ZIG_LOJA_MAP
- * @param lojaIdOverride  Passa direto um lojaId (ignora mapa)
+ * Corte de período (mesmo que areas.service.ts):
+ *   AFTERNOON → reserva antes das 17:30 → filtra transações ZIG entre 12:00 e 17:29
+ *   NIGHT     → reserva a partir das 17:30 → filtra transações ZIG entre 17:30 e 23:59
+ *
+ * @param tablesCsv       CSV de mesas (ex.: "321,322,323")
+ * @param date            Data/hora da reserva
+ * @param unitSlug        Slug da unidade — usado para resolver o lojaId no ZIG_LOJA_MAP
+ * @param lojaIdOverride  Override manual do lojaId (ignora mapa)
  */
 export async function getZigBillingForReservation(
   tablesCsv:       string,
@@ -233,17 +295,28 @@ export async function getZigBillingForReservation(
   const tables = tablesCsv.split(',').map((t) => t.trim()).filter(Boolean);
   if (tables.length === 0) throw new Error('A reserva não possui mesas vinculadas.');
 
-  const d   = typeof date === 'string' ? new Date(date) : date;
-  const ymd = d.toISOString().slice(0, 10);
+  const d      = typeof date === 'string' ? new Date(date) : date;
+  const ymd    = d.toISOString().slice(0, 10);
+  const period = getPeriod(d);
+  const bounds = periodBounds(period);
 
-  const allTx = await fetchSaidaProdutos(ymd, ymd, lojaId);
+  // Para jantar, busca também o dia seguinte (transações até 01:00)
+  const dtfim = period === 'NIGHT'
+    ? (() => { const nd = new Date(d); nd.setDate(nd.getDate() + 1); return nd.toISOString().slice(0, 10); })()
+    : ymd;
 
+  const allTx = await fetchSaidaProdutos(ymd, dtfim, lojaId);
+
+  // Filtra por período (almoço: 12:00–15:00 / jantar: 17:30–01:00 dia seguinte)
+  const periodTx = allTx.filter((tx) => txInPeriod(tx.transactionDate, ymd, period));
+
+  // Agrupa por mesa
   const byTableMap = new Map<string, ZigSaidaProduto[]>();
   for (const mesa of tables) byTableMap.set(mesa, []);
 
   let totalValueCents = 0;
 
-  for (const tx of allTx) {
+  for (const tx of periodTx) {
     const mesa = matchTransactionToTable(tx, tables);
     if (!mesa) continue;
     byTableMap.get(mesa)!.push(tx);
@@ -269,7 +342,8 @@ export async function getZigBillingForReservation(
     totalValueCents,
     totalValueBRL,
     byTable,
-    date: ymd,
+    date:    ymd,
+    period,
     lojaId,
     unitSlug: unitSlug ?? undefined,
   };

@@ -1,8 +1,12 @@
 // src/index.ts
 import http from 'http';
 import { buildServer } from './infrastructure/http/server';
+import { startZigBillingJobs } from './services/zig.billing.job';
 
 const app = buildServer();
+
+// Inicia jobs ZIG (só roda se ZIG_TOKEN estiver configurado)
+startZigBillingJobs();
 
 // Railway/Heroku/etc informam a porta via env.
 // NÃO hardcode — use process.env.PORT e 0.0.0.0

@@ -140,6 +140,10 @@ model Reservation {
   tables String? @db.VarChar(512)
   notes String? @db.Text
 
+  // Faturamento ZIG (preenchido ao consultar /v1/zig/billing)
+  zigBillingCents Int?      // total em centavos
+  zigBilledAt     DateTime? // quando foi consultado pela última vez
+
   utm_source   String? @db.VarChar(64)
   utm_medium   String? @db.VarChar(64)
   utm_campaign String? @db.VarChar(128)
