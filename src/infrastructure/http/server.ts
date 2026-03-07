@@ -26,6 +26,7 @@ import { unitsPublicRouter } from './routes/units.public.routes';
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
 import { blocksRouter } from './routes/blocks.routes';
 import { auditRouter } from './routes/audit.routes';
+import { zigBillingRouter } from './routes/zig.billing.routes';
 import { apiKeyAuth } from './middlewares/apiKeyAuth';
 import { requireAuth } from './middlewares/requireAuth'; // 🔥 IMPORTA AQUI
 
@@ -224,6 +225,7 @@ export function buildServer() {
   app.use('/v1/units', unitsRouter);
   app.use('/v1/users', usersRouter);
   app.use('/v1/audit', auditRouter); // logs de auditoria
+  app.use('/v1/zig', zigBillingRouter); // faturamento ZIG por reserva
 
   // Swagger
   const openapiPath = path.resolve(__dirname, '..', '..', '..', 'openapi.json');
