@@ -286,6 +286,22 @@ export class ReservationController {
     // 📋 Log de auditoria
     await logFromRequest(req, 'UPDATE', 'Reservation', req.params.id, oldData, payload);
 
+    // 📡 Webhook n8n
+    notifyN8nNewContact({
+      type: 'reservation_updated',
+      name: updated.fullName,
+      email: updated.email ?? null,
+      phone: updated.phone ?? null,
+      reservationId: updated.id,
+      reservationCode: updated.reservationCode ?? null,
+      reservationDate: updated.reservationDate instanceof Date ? updated.reservationDate.toISOString() : String(updated.reservationDate),
+      people: updated.people,
+      kids: updated.kids,
+      unitId: updated.unitId ?? null,
+      areaId: updated.areaId ?? null,
+      source: updated.source ?? 'admin',
+    });
+
     const meta = (req as any).overbookingMeta ? { overbooking: (req as any).overbookingMeta } : undefined;
     return res.json(meta ? { ...updated, meta } : updated);
   };

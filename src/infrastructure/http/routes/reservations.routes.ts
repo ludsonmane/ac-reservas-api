@@ -12,6 +12,7 @@ import { UpdateReservation } from '../../../application/use-cases/UpdateReservat
 import { DeleteReservation } from '../../../application/use-cases/DeleteReservation';
 import { ReservationController } from '../../../interfaces/http/controllers/ReservationController';
 import { prisma } from '../../db/prisma';
+import { notifyN8nNewContact } from '../../../services/n8n';
 
 // ⬇️ auth/role guards
 import { requireAuth, requireRole } from '../middlewares/requireAuth';
@@ -592,6 +593,7 @@ reservationsRouter.put(
           reservationDate: true,
         },
       });
+      notifyN8nNewContact({ type: 'reservation_status_updated', name: updated.fullName, email: null, phone: updated.phone ?? null, reservationId: updated.id, reservationCode: updated.reservationCode ?? null, reservationDate: updated.reservationDate.toISOString(), people: updated.people, kids: updated.kids ?? null, unitId: updated.unitId ?? null, areaId: updated.areaId ?? null, source: 'admin' });
       return res.json(updated);
     } catch (err) {
       next(err);
@@ -640,6 +642,8 @@ reservationsRouter.post(
       // 📋 Log de auditoria
       await logFromRequest(req, 'CHECKIN', 'Reservation', id, { status: r.status }, { status: updated.status });
 
+      notifyN8nNewContact({ type: 'reservation_checkin', name: updated.fullName, email: null, phone: updated.phone ?? null, reservationId: updated.id, reservationCode: updated.reservationCode ?? null, reservationDate: updated.reservationDate.toISOString(), people: updated.people, unitId: updated.unitId ?? null, areaId: updated.areaId ?? null, source: 'admin' });
+
       return res.json(updated);
     } catch (err) {
       next(err);
@@ -687,6 +691,8 @@ reservationsRouter.post(
         },
       });
 
+      notifyN8nNewContact({ type: 'reservation_checkin', name: updated.fullName, email: null, phone: updated.phone ?? null, reservationId: updated.id, reservationCode: updated.reservationCode ?? null, reservationDate: updated.reservationDate.toISOString(), people: updated.people, unitId: updated.unitId ?? null, areaId: updated.areaId ?? null, source: 'qr' });
+
       return res.json(updated);
     } catch (err) {
       next(err);
@@ -733,6 +739,7 @@ reservationsRouter.post(
         });
         // 📋 Log de auditoria
         await logFromRequest(req, 'NO_SHOW', 'Reservation', id, { status: oldStatus }, { status: updated.status });
+        notifyN8nNewContact({ type: 'reservation_noshow_undone', name: updated.fullName, email: null, phone: updated.phone ?? null, reservationId: updated.id, reservationCode: updated.reservationCode ?? null, reservationDate: updated.reservationDate.toISOString(), people: updated.people, kids: updated.kids ?? null, unitId: updated.unitId ?? null, areaId: updated.areaId ?? null, source: 'admin' });
         return res.json(updated);
       }
 
@@ -763,6 +770,8 @@ reservationsRouter.post(
 
       // 📋 Log de auditoria
       await logFromRequest(req, 'NO_SHOW', 'Reservation', id, { status: oldStatus }, { status: updated.status });
+
+      notifyN8nNewContact({ type: 'reservation_noshow', name: updated.fullName, email: null, phone: updated.phone ?? null, reservationId: updated.id, reservationCode: updated.reservationCode ?? null, reservationDate: updated.reservationDate.toISOString(), people: updated.people, kids: updated.kids ?? null, unitId: updated.unitId ?? null, areaId: updated.areaId ?? null, source: 'admin' });
 
       return res.json(updated);
     } catch (err) {
