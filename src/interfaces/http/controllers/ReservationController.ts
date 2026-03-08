@@ -287,19 +287,20 @@ export class ReservationController {
     await logFromRequest(req, 'UPDATE', 'Reservation', req.params.id, oldData, payload);
 
     // 📡 Webhook n8n
+    const u = updated as any;
     notifyN8nNewContact({
       type: 'reservation_updated',
-      name: updated.fullName,
-      email: updated.email ?? null,
-      phone: updated.phone ?? null,
-      reservationId: updated.id,
-      reservationCode: updated.reservationCode ?? null,
-      reservationDate: updated.reservationDate instanceof Date ? updated.reservationDate.toISOString() : String(updated.reservationDate),
-      people: updated.people,
-      kids: updated.kids,
-      unitId: updated.unitId ?? null,
-      areaId: updated.areaId ?? null,
-      source: updated.source ?? 'admin',
+      name: u.fullName,
+      email: u.email ?? null,
+      phone: u.phone ?? null,
+      reservationId: u.id,
+      reservationCode: u.reservationCode ?? null,
+      reservationDate: u.reservationDate instanceof Date ? u.reservationDate.toISOString() : String(u.reservationDate),
+      people: u.people,
+      kids: u.kids,
+      unitId: u.unitId ?? null,
+      areaId: u.areaId ?? null,
+      source: u.source ?? 'admin',
     });
 
     const meta = (req as any).overbookingMeta ? { overbooking: (req as any).overbookingMeta } : undefined;
