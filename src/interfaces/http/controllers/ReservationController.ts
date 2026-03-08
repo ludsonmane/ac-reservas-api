@@ -163,6 +163,7 @@ export class ReservationController {
       reservationDate: c.reservationDate instanceof Date ? c.reservationDate.toISOString() : String(c.reservationDate),
       people: c.people,
       kids: c.kids,
+      tables: c.tables ?? null,
       source: c.source ?? 'admin',
       url: c.url ?? null,
       ref: c.ref ?? null,
@@ -293,15 +294,31 @@ export class ReservationController {
       name: u.fullName,
       email: u.email ?? null,
       phone: u.phone ?? null,
+      cpf: u.cpf ?? null,
       reservationId: u.id,
       reservationCode: u.reservationCode ?? null,
+      reservationType: u.reservationType ?? null,
       reservationDate: u.reservationDate instanceof Date ? u.reservationDate.toISOString() : String(u.reservationDate),
       people: u.people,
       kids: u.kids,
+      tables: u.tables ?? null,
+      store: u.unit ?? null,
       unitId: u.unitId ?? null,
       areaId: u.areaId ?? null,
+      areaName: u.areaName ?? null,
       source: u.source ?? 'admin',
-    });
+      url: u.url ?? null,
+      ref: u.ref ?? null,
+      utm: {
+        utm_source: u.utm_source ?? null,
+        utm_medium: u.utm_medium ?? null,
+        utm_campaign: u.utm_campaign ?? null,
+        utm_content: u.utm_content ?? null,
+        utm_term: u.utm_term ?? null,
+      },
+      zigBillingCents: u.zigBillingCents ?? null,
+      zigBilledAt: u.zigBilledAt ? (u.zigBilledAt instanceof Date ? u.zigBilledAt.toISOString() : String(u.zigBilledAt)) : null,
+    } as any);
 
     const meta = (req as any).overbookingMeta ? { overbooking: (req as any).overbookingMeta } : undefined;
     return res.json(meta ? { ...updated, meta } : updated);

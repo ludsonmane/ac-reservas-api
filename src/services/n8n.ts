@@ -20,6 +20,9 @@ export type N8NContactPayload = {
   reservationDate?: string | null;
   people?: number | null;
   kids?: number | null;
+  tables?: string | null;
+  zigBillingCents?: number | null;
+  zigBilledAt?: string | null;
 
   source: string;
   url?: string | null;
