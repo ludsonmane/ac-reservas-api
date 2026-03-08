@@ -13,12 +13,13 @@
     "dev": "ts-node-dev --respawn --transpile-only --files src/index.ts",
     "// local-only helpers": "------------------------------------------------",
     "db:gen": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:deploy": "prisma migrate deploy",
+    "db:migrate": "bash scripts/safe-migrate.sh dev",
+    "db:deploy": "bash scripts/safe-migrate.sh deploy",
     "db:seed": "prisma db seed",
+    "db:reset": "bash scripts/safe-migrate.sh reset",
     "// CI/Buildpack compat (Railway)": "--------------------------------------",
     "prisma:generate": "prisma generate",
-    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate": "bash scripts/safe-migrate.sh deploy",
     "test:mail": "tsx src/scripts/test-sg.ts",
     "// build/start (prod)": "------------------------------------------------",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -27,7 +28,9 @@
     "lint": "echo \"add eslint if you want\"",
     "// optional: ensure prisma client on install": "---------------------------",
     "postinstall": "prisma generate",
-    "migrate:deploy": "prisma migrate deploy"
+    "migrate:deploy": "bash scripts/safe-migrate.sh deploy",
+    "// setup (run once after clone)": "-----------------------------------------",
+    "prepare": "node -e \"const fs=require('fs'); const p='.git/hooks/pre-push'; fs.mkdirSync('.git/hooks',{recursive:true}); fs.copyFileSync('.husky/pre-push', p); fs.chmodSync(p, '755'); console.log('✅ git hook pre-push instalado');\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.933.0",

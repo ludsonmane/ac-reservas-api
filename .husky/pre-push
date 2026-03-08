@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# =============================================================================
+# .husky/pre-push  (ou .git/hooks/pre-push)
+#
+# Bloqueia push se houver "prisma migrate reset" ou "db push --force-reset"
+# nos scripts do package.json ou em qualquer arquivo staged/commitado.
+# =============================================================================
+
+set -euo pipefail
+
+RED='\033[0;31m'
+NC='\033[0m'
+
+BLOCKED_PATTERNS=(
+  "prisma migrate reset"
+  "prisma db push --force-reset"
+  "prisma db push --accept-data-loss"
+)
+
+found=0
+
+for pattern in "${BLOCKED_PATTERNS[@]}"; do
+  # Verifica se o padrão existe em qualquer arquivo rastreado pelo git
+  if git grep --quiet -r "$pattern" -- '*.ts' '*.js' '*.sh' '*.json' 2>/dev/null; then
+    echo ""
+    echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  🚨  PUSH BLOQUEADO                                      ║${NC}"
+    echo -e "${RED}╠══════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${RED}║  Encontrado comando destrutivo no código:                ║${NC}"
+    echo -e "${RED}║  \"$pattern\"${NC}"
+    echo -e "${RED}║                                                          ║${NC}"
+    echo -e "${RED}║  Remova ou mova para scripts/safe-migrate.sh             ║${NC}"
+    echo -e "${RED}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    git grep -rn "$pattern" -- '*.ts' '*.js' '*.sh' '*.json' 2>/dev/null || true
+    found=1
+  fi
+done
+
+[[ $found -eq 1 ]] && exit 1
+
+exit 0

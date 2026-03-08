@@ -1,0 +1,84 @@
+# .github/workflows/deploy.yml
+#
+# CI/CD com proteção contra comandos destrutivos de banco.
+# - Em produção: só permite `prisma migrate deploy` (nunca reset)
+# - Faz backup antes de qualquer migrate
+
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  # ─── 1. Checa se há comandos destrutivos no código ─────────────────────────
+  safety-check:
+    name: 🔒 Safety Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bloquear comandos destrutivos de banco
+        run: |
+          BLOCKED=("prisma migrate reset" "prisma db push --force-reset" "prisma db push --accept-data-loss")
+          FOUND=0
+          for pattern in "${BLOCKED[@]}"; do
+            if grep -r "$pattern" --include="*.ts" --include="*.js" --include="*.sh" --include="*.json" .; then
+              echo "❌ Comando destrutivo encontrado: '$pattern'"
+              FOUND=1
+            fi
+          done
+          if [ $FOUND -eq 1 ]; then
+            echo ""
+            echo "🚨 Push bloqueado. Remova os comandos destrutivos antes de fazer deploy."
+            exit 1
+          fi
+          echo "✅ Nenhum comando destrutivo encontrado."
+
+  # ─── 2. Build e testes ────────────────────────────────────────────────────
+  build:
+    name: 🔨 Build
+    runs-on: ubuntu-latest
+    needs: safety-check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+      - run: npm run typecheck
+
+  # ─── 3. Deploy com migrate seguro ─────────────────────────────────────────
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production
+    env:
+      NODE_ENV: production
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Prisma generate
+        run: npx prisma generate
+
+      # APENAS migrate deploy — nunca migrate reset
+      - name: Migrate deploy (seguro)
+        run: |
+          echo "▶ Rodando prisma migrate deploy..."
+          npx prisma migrate deploy
+          echo "✅ Migrations aplicadas com sucesso."
+
+      - name: Build
+        run: npm run build

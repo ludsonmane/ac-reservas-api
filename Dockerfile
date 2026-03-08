@@ -61,8 +61,8 @@ RUN printf '%s\n' \
 'export PRISMA_CLIENT_ENGINE_TYPE=binary' \
 'npx prisma generate' \
 '' \
-'# Primeiro deploy: aplica schema direto; depois migrações versionadas' \
-'if ! npx prisma db push --accept-data-loss; then sleep 5; npx prisma db push --accept-data-loss; fi' \
+'# Aplica migrations versionadas (seguro — nunca dropa dados)' \
+'npx prisma migrate deploy' \
 '' \
 '# Descobre entrypoint automaticamente' \
 'candidates=("dist/index.js" "dist/main.js" "dist/server.js" "dist/src/index.js" "api/dist/index.js" "api/dist/main.js" "api/dist/server.js")' \
