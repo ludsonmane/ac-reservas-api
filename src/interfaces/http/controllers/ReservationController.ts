@@ -11,6 +11,7 @@ import { sendReservationTicket } from '../../../services/email/sendReservationTi
 import { z } from 'zod';
 import { prisma } from '../../../infrastructure/db/prisma';
 import { logFromRequest } from '../../../services/audit/auditLog.service';
+import { notifyN8nNewContact } from '../../../services/n8n';
 
 /* ===== Helpers ===== */
 function toInt(v: unknown, fb: number): number {
@@ -144,6 +145,35 @@ export class ReservationController {
 
     // 📋 Log de auditoria
     await logFromRequest(req, 'CREATE', 'Reservation', c.id, null, { fullName: c.fullName, people: c.people, reservationDate: c.reservationDate });
+
+    // 📡 Webhook n8n — fire-and-forget, não bloqueia a resposta
+    notifyN8nNewContact({
+      type: 'reservation_created',
+      name: c.fullName,
+      email: c.email ?? null,
+      phone: c.phone ?? null,
+      cpf: c.cpf ?? null,
+      store: c.unit ?? null,
+      unitId: c.unitId ?? null,
+      areaId: c.areaId ?? null,
+      areaName: c.areaName ?? null,
+      reservationId: c.id,
+      reservationCode: c.reservationCode ?? null,
+      reservationType: c.reservationType ?? null,
+      reservationDate: c.reservationDate instanceof Date ? c.reservationDate.toISOString() : String(c.reservationDate),
+      people: c.people,
+      kids: c.kids,
+      source: c.source ?? 'admin',
+      url: c.url ?? null,
+      ref: c.ref ?? null,
+      utm: {
+        utm_source: c.utm_source ?? null,
+        utm_medium: c.utm_medium ?? null,
+        utm_campaign: c.utm_campaign ?? null,
+        utm_content: c.utm_content ?? null,
+        utm_term: c.utm_term ?? null,
+      },
+    });
 
     // Envia ticket por e-mail sem bloquear a resposta
     try {
