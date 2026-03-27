@@ -150,7 +150,7 @@ export class PrismaReservationRepository implements ReservationRepository {
   // ✅ unitId ESTRITO (sem legado quando informado) + to inclusivo + AND global
   async findMany({ search, unit, unitId, areaId, from, to, skip, take }: FindManyParams) {
     const safeSkip = Math.max(0, Number(skip) || 0);
-    const safeTake = Math.min(100, Math.max(1, Number(take) || 20));
+    const safeTake = Math.min(500, Math.max(1, Number(take) || 20));
     const q = (search ?? '').toString().trim();
 
     // Fast-path: busca direta por localizador (6 chars)
@@ -171,6 +171,7 @@ export class PrismaReservationRepository implements ReservationRepository {
           phone: true,
           email: true,
           tables: true,
+          notes: true,
           zigBillingCents: true,
           zigBilledAt: true,
           unit: true,       // legado (slug/nome)
@@ -178,10 +179,13 @@ export class PrismaReservationRepository implements ReservationRepository {
           area: true,       // legado
           areaId: true,     // novo
           areaName: true,
+          source: true,
           status: true,
+          checkedInAt: true,
           createdAt: true,
           updatedAt: true,
           utm_source: true,
+          utm_medium: true,
           utm_campaign: true,
         },
       });
@@ -229,15 +233,13 @@ export class PrismaReservationRepository implements ReservationRepository {
     // (3) Filtro por área
     if (areaId) AND.push({ areaId });
 
-    // (4) Intervalo de datas (to inclusivo)
+    // (4) Intervalo de datas — usa os valores como recebidos (o cliente já envia
+    //     os limites corretos em UTC; não manipulamos horas aqui para não
+    //     deslocar o range por conta de timezone)
     if (isValidDate(from) || isValidDate(to)) {
       const range: Prisma.DateTimeFilter = {};
       if (isValidDate(from)) range.gte = from!;
-      if (isValidDate(to)) {
-        const end = new Date(to!);
-        end.setHours(23, 59, 59, 999);
-        range.lte = end;
-      }
+      if (isValidDate(to)) range.lte = to!;
       AND.push({ reservationDate: range });
     }
 
@@ -261,6 +263,7 @@ export class PrismaReservationRepository implements ReservationRepository {
           phone: true,
           email: true,
           tables: true,
+          notes: true,
           zigBillingCents: true,
           zigBilledAt: true,
           reservationType: true,
@@ -269,10 +272,13 @@ export class PrismaReservationRepository implements ReservationRepository {
           area: true,       // legado
           areaId: true,     // novo
           areaName: true,   // denormalizado
+          source: true,
           status: true,
+          checkedInAt: true,
           createdAt: true,
           updatedAt: true,
           utm_source: true,
+          utm_medium: true,
           utm_campaign: true,
         },
       }),

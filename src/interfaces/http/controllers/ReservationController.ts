@@ -213,7 +213,7 @@ export class ReservationController {
   /* ================== GET /v1/reservations ================== */
   list = async (req: Request, res: Response) => {
     const page = Math.max(parseInt(String(req.query.page ?? '1'), 10), 1);
-    const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize ?? '20'), 10), 1), 100);
+    const pageSize = Math.min(Math.max(parseInt(String(req.query.pageSize ?? '20'), 10), 1), 500);
 
     const search =
       asStr(req.query.search) ??
