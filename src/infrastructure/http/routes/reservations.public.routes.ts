@@ -148,6 +148,36 @@ router.get('/by-id/:id', async (req, res) => {
 });
 
 /* =============================================================================
+   GET /v1/reservations/public/by-code/:code
+   Busca reserva pelo localizador (6 chars) — usado na página de convidados
+============================================================================= */
+router.get('/by-code/:code', async (req, res) => {
+  const code = (req.params.code ?? '').trim().toUpperCase();
+  if (!code || code.length < 4) {
+    return res.status(400).json({ error: { code: 'VALIDATION', message: 'Código inválido.' } });
+  }
+  const r = await prisma.reservation.findUnique({
+    where: { reservationCode: code },
+    select: {
+      id: true,
+      reservationCode: true,
+      status: true,
+      fullName: true,
+      date: true,
+      time: true,
+      adults: true,
+      kids: true,
+      reservationType: true,
+      unit: { select: { id: true, name: true } },
+      area: { select: { id: true, name: true } },
+      guests: { select: { id: true, name: true, cpf: true, createdAt: true }, orderBy: { createdAt: 'asc' } },
+    },
+  });
+  if (!r) return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
+  return res.json(r);
+});
+
+/* =============================================================================
    GET /v1/reservations/public/active
 ============================================================================= */
 router.get('/active', async (req, res) => {
@@ -524,6 +554,58 @@ router.post('/:id/guests/bulk', async (req, res) => {
     }
     console.error('[reservations.public.guests.bulk] error:', err);
     return res.status(500).json({ error: { code: 'INTERNAL' } });
+  }
+});
+
+/* =============================================================================
+   POST /v1/reservations/public/guest-register
+   Convidado se registra pelo código da reserva + nome + CPF (público, sem auth)
+============================================================================= */
+router.post('/guest-register', async (req, res) => {
+  try {
+    const code = (req.body?.code ?? '').trim().toUpperCase();
+    const name = (req.body?.name ?? '').trim();
+    const cpfRaw = (req.body?.cpf ?? '').replace(/\D/g, '');
+
+    if (!code || code.length < 4) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Código da reserva inválido.' } });
+    }
+    if (!name || name.length < 2) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Nome inválido.' } });
+    }
+    if (cpfRaw.length !== 11) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'CPF inválido.' } });
+    }
+
+    const reservation = await prisma.reservation.findUnique({
+      where: { reservationCode: code },
+      select: { id: true, status: true },
+    });
+    if (!reservation) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
+    }
+
+    // Verifica duplicata por CPF
+    const existing = await prisma.guest.findUnique({
+      where: { guest_reservation_cpf_unique: { reservationId: reservation.id, cpf: cpfRaw } },
+    });
+    if (existing) {
+      return res.status(409).json({ error: { code: 'DUPLICATE', message: 'Você já está na lista de convidados!' } });
+    }
+
+    const guest = await prisma.guest.create({
+      data: {
+        reservationId: reservation.id,
+        name,
+        cpf: cpfRaw,
+      },
+      select: { id: true, name: true, cpf: true, createdAt: true },
+    });
+
+    return res.status(201).json(guest);
+  } catch (err) {
+    console.error('[reservations.public.guest-register] error:', err);
+    return res.status(500).json({ error: { code: 'INTERNAL', message: 'Falha ao registrar convidado.' } });
   }
 });
 

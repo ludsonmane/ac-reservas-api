@@ -144,6 +144,11 @@ model Reservation {
   zigBillingCents Int?      // total em centavos
   zigBilledAt     DateTime? // quando foi consultado pela última vez
 
+  // Faturamento Manezin (campos de teste — dados via API Manezin)
+  manezinBillingCents Int?      // total em centavos
+  manezinBilledAt     DateTime? // quando foi consultado
+  manezinTxCount      Int?      // quantidade de transações encontradas
+
   utm_source   String? @db.VarChar(64)
   utm_medium   String? @db.VarChar(64)
   utm_campaign String? @db.VarChar(128)
@@ -187,15 +192,16 @@ model Guest {
   reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   name  String    @db.VarChar(200)
-  email String    @db.VarChar(200)
+  cpf   String?   @db.VarChar(14)
+  email String?   @db.VarChar(200)
   role  GuestRole @default(GUEST)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([reservationId, email], map: "guest_reservation_email_unique")
+  @@unique([reservationId, cpf], map: "guest_reservation_cpf_unique")
   @@index([reservationId], map: "guest_reservation_idx")
-  @@index([email], map: "guest_email_idx")
+  @@index([cpf], map: "guest_cpf_idx")
   @@map("guest")
 }
 
