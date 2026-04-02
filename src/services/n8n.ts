@@ -21,6 +21,7 @@ export type N8NContactPayload = {
   people?: number | null;
   kids?: number | null;
   tables?: string | null;
+  guestLink?: string | null;
   zigBillingCents?: number | null;
   zigBilledAt?: string | null;
 

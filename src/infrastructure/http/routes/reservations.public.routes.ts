@@ -471,6 +471,7 @@ router.post('/', async (req, res) => {
       reservationDate: dt.toISOString(),
       people: Math.max(0, Math.floor(peopleNum)),
       kids: Math.max(0, Math.floor(kidsNum)),
+      guestLink: `https://reservas.mane.com.vc/convidados/${created.reservationCode}`,
 
       // origem
       source: source ?? 'site',
