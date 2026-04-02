@@ -490,6 +490,35 @@ router.post('/', async (req, res) => {
       role: 'HOST',
     });
 
+    // Disparo WPP confirmação + link convidados (fire-and-forget)
+    void (async () => {
+      try {
+        const wppUrl = 'https://n8n.mane.com.vc/webhook/reserva-confirmada-v3';
+        await fetch(wppUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json; charset=utf-8' },
+          body: JSON.stringify({
+            type: 'reservation_created',
+            name: String(fullName),
+            phone: phoneNorm ?? null,
+            email: emailNorm ?? null,
+            store: unit?.name ?? null,
+            unitId: unit?.id ?? null,
+            areaName: area?.name ?? null,
+            reservationCode: created.reservationCode,
+            reservationType: created.reservationType,
+            reservationDate: dt.toISOString(),
+            people: Math.max(0, Math.floor(peopleNum)),
+            kids: Math.max(0, Math.floor(kidsNum)),
+            guestLink: `https://reservas.mane.com.vc/convidados/${created.reservationCode}`,
+          }),
+        });
+        console.log('[wpp-confirm] webhook sent ok');
+      } catch (err: any) {
+        console.error('[wpp-confirm] webhook failed:', err?.message || err);
+      }
+    })();
+
     return res.status(201).json(created);
   } catch (e: any) {
     console.error('[reservations.public] error:', e);
