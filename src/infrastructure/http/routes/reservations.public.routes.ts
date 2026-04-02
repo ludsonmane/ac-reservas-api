@@ -158,16 +158,7 @@ router.get('/by-code/:code', async (req, res) => {
   }
   const r = await prisma.reservation.findUnique({
     where: { reservationCode: code },
-    select: {
-      id: true,
-      reservationCode: true,
-      status: true,
-      fullName: true,
-      date: true,
-      time: true,
-      adults: true,
-      kids: true,
-      reservationType: true,
+    include: {
       unit: { select: { id: true, name: true } },
       area: { select: { id: true, name: true } },
       guests: { select: { id: true, name: true, cpf: true, createdAt: true }, orderBy: { createdAt: 'asc' } },
@@ -586,8 +577,8 @@ router.post('/guest-register', async (req, res) => {
     }
 
     // Verifica duplicata por CPF
-    const existing = await prisma.guest.findUnique({
-      where: { guest_reservation_cpf_unique: { reservationId: reservation.id, cpf: cpfRaw } },
+    const existing = await prisma.guest.findFirst({
+      where: { reservationId: reservation.id, cpf: cpfRaw },
     });
     if (existing) {
       return res.status(409).json({ error: { code: 'DUPLICATE', message: 'Você já está na lista de convidados!' } });
