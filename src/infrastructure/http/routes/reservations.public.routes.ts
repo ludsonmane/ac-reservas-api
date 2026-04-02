@@ -159,8 +159,8 @@ router.get('/by-code/:code', async (req, res) => {
   const r = await prisma.reservation.findUnique({
     where: { reservationCode: code },
     include: {
-      unit: { select: { id: true, name: true } },
-      area: { select: { id: true, name: true } },
+      unitRef: { select: { id: true, name: true } },
+      areaRef: { select: { id: true, name: true } },
       guests: { select: { id: true, name: true, cpf: true, createdAt: true }, orderBy: { createdAt: 'asc' } },
     },
   });
