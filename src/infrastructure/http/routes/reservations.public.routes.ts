@@ -527,6 +527,208 @@ router.post('/', async (req, res) => {
 });
 
 /* =============================================================================
+   PATCH /v1/reservations/public/by-code/:code
+   - Atualiza reserva pública existente.
+   - Auth: o phone do body precisa bater com o phone da reserva (anti-tampering).
+   - Campos editáveis: people, kids, reservationDate, areaId, notes, fullName,
+     email, birthdayDate, reservationType.
+   - Mantém a regra de capacidade considerando o que já estava reservado (creditoAtual).
+============================================================================= */
+router.patch('/by-code/:code', async (req, res) => {
+  try {
+    const code = String(req.params.code || '').trim().toUpperCase();
+    if (!code) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Código obrigatório.' } });
+    }
+
+    const body = req.body || {};
+    const phone = body.phone ? String(body.phone).replace(/\D+/g, '') : null;
+    if (!phone) {
+      return res.status(400).json({ error: { code: 'VALIDATION', message: 'Phone obrigatório para validação.' } });
+    }
+
+    const r = await prisma.reservation.findUnique({ where: { reservationCode: code } });
+    if (!r) {
+      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Reserva não encontrada.' } });
+    }
+
+    // anti-tampering: phone tem que bater (compara últimos 9 dígitos pra ignorar DDI/0)
+    const phoneLast = phone.slice(-9);
+    const reservPhoneLast = String(r.phone || '').replace(/\D+/g, '').slice(-9);
+    if (!reservPhoneLast || phoneLast !== reservPhoneLast) {
+      return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Phone não confere com a reserva.' } });
+    }
+
+    // só edita reserva ativa (AWAITING_CHECKIN)
+    if (r.status !== 'AWAITING_CHECKIN') {
+      return res.status(409).json({
+        error: {
+          code: 'NOT_EDITABLE',
+          message: `Reserva no status ${r.status} não pode ser editada via API pública. Fale com a equipe.`,
+        },
+      });
+    }
+
+    // Build data
+    const data: any = {};
+    if (body.fullName !== undefined && String(body.fullName).trim().length >= 3) {
+      data.fullName = String(body.fullName).trim();
+    }
+    if (body.cpf !== undefined) data.cpf = body.cpf ? String(body.cpf) : null;
+    if (body.email !== undefined) data.email = toLowerEmail(body.email);
+    if (body.notes !== undefined) data.notes = body.notes ? String(body.notes) : null;
+    if (body.birthdayDate !== undefined) {
+      data.birthdayDate = body.birthdayDate ? new Date(body.birthdayDate) : null;
+    }
+    if (body.reservationType !== undefined || body.reservation_type !== undefined) {
+      data.reservationType = parseReservationType(body.reservationType ?? body.reservation_type);
+    }
+
+    const newPeople = body.people !== undefined ? Math.max(0, Math.floor(Number(body.people))) : Number(r.people || 0);
+    const newKids = body.kids !== undefined ? Math.max(0, Math.floor(Number(body.kids))) : Number(r.kids || 0);
+    const newDate = body.reservationDate ? new Date(body.reservationDate) : r.reservationDate;
+    const newAreaId = body.areaId ? String(body.areaId) : (r.areaId || '');
+    const newUnitId = body.unitId ? String(body.unitId) : (r.unitId || '');
+
+    // Se mudou capacidade/data/area/unit → revalida
+    const peopleChanged = newPeople !== Number(r.people || 0) || newKids !== Number(r.kids || 0);
+    const dateChanged = newDate.getTime() !== new Date(r.reservationDate).getTime();
+    const areaChanged = newAreaId !== (r.areaId || '');
+    const unitChanged = newUnitId !== (r.unitId || '');
+
+    if (peopleChanged || dateChanged || areaChanged || unitChanged) {
+      if (!newAreaId || !newUnitId) {
+        return res.status(400).json({ error: { code: 'VALIDATION', message: 'unitId/areaId obrigatórios para revalidar capacidade.' } });
+      }
+
+      // checa unit/area
+      const [unit, area] = await Promise.all([
+        prisma.unit.findUnique({ where: { id: newUnitId }, select: { id: true, name: true, isActive: true } }),
+        prisma.area.findUnique({
+          where: { id: newAreaId },
+          select: { id: true, name: true, capacityAfternoon: true, capacityNight: true, isActive: true, unitId: true },
+        }),
+      ]);
+      if (!unit || !unit.isActive) {
+        return res.status(404).json({ error: { code: 'UNIT_NOT_FOUND', message: 'Unidade inexistente ou inativa.' } });
+      }
+      if (!area || !area.isActive || area.unitId !== unit.id) {
+        return res.status(404).json({ error: { code: 'AREA_NOT_FOUND', message: 'Área inexistente/inativa ou não pertence à unidade.' } });
+      }
+
+      // bloqueios
+      const dt = newDate;
+      const dayStart = startOfDay(dt);
+      const dayEnd = endOfDay(dt);
+      const currentPeriod = getPeriodFromDate(dt) === 'AFTERNOON' ? ReservationBlockPeriod.AFTERNOON : ReservationBlockPeriod.NIGHT;
+      const blocks = await prisma.reservationBlock.findMany({
+        where: {
+          unitId: unit.id,
+          mode: ReservationBlockMode.PERIOD,
+          date: { gte: dayStart, lte: dayEnd },
+          period: { in: [ReservationBlockPeriod.ALL_DAY, currentPeriod] },
+          OR: [{ areaId: null }, { areaId: area.id }],
+        },
+        select: { id: true },
+      });
+      if (blocks.length > 0) {
+        return res.status(409).json({ error: { code: 'BLOCKED_DAY', message: 'Reservas bloqueadas para esta data/período.' } });
+      }
+
+      // capacidade considerando crédito da reserva atual (mesma area/data/periodo)
+      const { from, to } = periodWindow(dt);
+      const maxPeriod = getPeriodFromDate(dt) === 'AFTERNOON' ? (area.capacityAfternoon ?? 0) : (area.capacityNight ?? 0);
+
+      const grouped = await prisma.reservation.groupBy({
+        by: ['areaId'],
+        where: {
+          areaId: area.id,
+          reservationDate: { gte: from, lte: to },
+          status: { in: ['AWAITING_CHECKIN', 'CHECKED_IN'] },
+        },
+        _sum: { people: true, kids: true },
+      });
+      const alreadyUsed = (grouped[0]?._sum.people ?? 0) + (grouped[0]?._sum.kids ?? 0);
+
+      // crédito: se mesma area+periodo+dia, subtrai o que essa reserva já ocupava
+      let creditoAtual = 0;
+      const sameArea = String(r.areaId || '') === String(area.id);
+      const sameUnit = String(r.unitId || '') === String(unit.id);
+      const prevDt = new Date(r.reservationDate);
+      const sameDay = prevDt.toDateString() === dt.toDateString();
+      const samePeriod = getPeriodFromDate(prevDt) === getPeriodFromDate(dt);
+      if (sameUnit && sameArea && sameDay && samePeriod) {
+        creditoAtual = Number(r.people || 0) + Number(r.kids || 0);
+      }
+
+      const willUse = newPeople + newKids;
+      const remaining = Math.max(0, maxPeriod - alreadyUsed + creditoAtual);
+      if (willUse > remaining) {
+        return res.status(409).json({
+          error: {
+            code: 'NO_CAPACITY',
+            message: 'Sem vagas suficientes nesta área/horário pra essa quantidade.',
+            remaining,
+            period: getPeriodFromDate(dt),
+          },
+        });
+      }
+
+      data.people = newPeople;
+      data.kids = newKids;
+      data.reservationDate = dt;
+      data.unitId = unit.id;
+      data.unit = unit.name;
+      data.areaId = area.id;
+      data.areaName = area.name;
+    }
+
+    if (Object.keys(data).length === 0) {
+      return res.status(400).json({ error: { code: 'NO_CHANGES', message: 'Nenhum campo enviado para atualização.' } });
+    }
+
+    const updated = await prisma.reservation.update({
+      where: { id: r.id },
+      data,
+      select: {
+        id: true,
+        reservationCode: true,
+        status: true,
+        fullName: true,
+        people: true,
+        kids: true,
+        reservationDate: true,
+        unitId: true,
+        unit: true,
+        areaId: true,
+        areaName: true,
+        phone: true,
+      },
+    });
+
+    notifyN8nNewContact({
+      type: 'reservation_updated',
+      name: updated.fullName,
+      email: null,
+      phone: updated.phone ?? null,
+      reservationId: updated.id,
+      reservationCode: updated.reservationCode ?? null,
+      reservationDate: updated.reservationDate.toISOString(),
+      people: updated.people,
+      kids: updated.kids ?? null,
+      unitId: updated.unitId ?? null,
+      areaId: updated.areaId ?? null,
+      source: 'public-api',
+    });
+
+    return res.json(updated);
+  } catch (e: any) {
+    console.error('[reservations.public.patch] error:', e);
+    return res.status(500).json({ error: { code: 'INTERNAL', message: 'Falha ao atualizar reserva.' } });
+  }
+});
+
+/* =============================================================================
    POST /v1/reservations/public/:id/guests/bulk
 ============================================================================= */
 router.post('/:id/guests/bulk', async (req, res) => {

@@ -22,6 +22,7 @@ const dryRun    = args.includes('--dry-run');
 const allTime   = args.includes('--all');
 const daysArg   = args.find(a => a.startsWith('--days='));
 const days      = daysArg ? parseInt(daysArg.split('=')[1], 10) : 30;
+const unitArg   = args.find(a => a.startsWith('--unit='))?.split('=')[1] || '';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -43,12 +44,18 @@ async function main() {
 
   log(`Iniciando backfill — modo: ${dryRun ? 'DRY-RUN' : 'REAL'}, período: ${allTime ? 'TODAS' : `últimos ${days} dias`}`);
 
-  // Filtro de data
+  // Filtro: CHECKED_IN com mesas, sem faturamento Manezin ainda
   const where: any = {
-    tables:          { not: null },
-    zigBillingCents: null,
-    status:          'CHECKED_IN',
+    tables:              { not: null },
+    manezinBillingCents: null,
+    status:              'CHECKED_IN',
   };
+
+  // Filtro por unidade (--unit=mane-west-plaza-sp)
+  if (unitArg) {
+    where.unitRef = { slug: unitArg };
+    log(`Filtrando por unidade: ${unitArg}`);
+  }
 
   if (!allTime) {
     const from = new Date();
@@ -85,29 +92,44 @@ async function main() {
     const r = reservations[i];
     const prefix = `[${i + 1}/${reservations.length}] ${r.id} (${r.fullName})`;
 
-    try {
-      const billing = await getZigBillingForReservation(
-        r.tables!,
-        r.reservationDate,
-        r.unitRef?.slug ?? null,
-      );
+    // Retry com backoff (API Manezin pode ser lenta)
+    let lastErr: any;
+    let success = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const billing = await getZigBillingForReservation(
+          r.tables!,
+          r.reservationDate,
+          r.unitRef?.slug ?? null,
+        );
 
-      if (dryRun) {
-        log(`${prefix} → DRY-RUN: ${billing.totalValueBRL} (${billing.transactions.length} tx, período: ${billing.period})`);
-      } else {
-        await prisma.reservation.update({
-          where: { id: r.id },
-          data: {
-            zigBillingCents: billing.totalValueCents,
-            zigBilledAt:     new Date(),
-          },
-        });
-        log(`✅ ${prefix} → ${billing.totalValueBRL} (${billing.transactions.length} tx, período: ${billing.period})`);
+        if (dryRun) {
+          log(`${prefix} → DRY-RUN: ${billing.totalValueBRL} (${billing.transactions.length} tx, período: ${billing.period})`);
+        } else {
+          await prisma.reservation.update({
+            where: { id: r.id },
+            data: {
+              manezinBillingCents: billing.totalValueCents,
+              manezinBilledAt:     new Date(),
+              manezinTxCount:      billing.transactions.length,
+            },
+          });
+          log(`✅ ${prefix} → ${billing.totalValueBRL} (${billing.transactions.length} tx, período: ${billing.period})`);
+        }
+        ok++;
+        success = true;
+        break;
+      } catch (err: any) {
+        lastErr = err;
+        if (attempt < 3) {
+          const wait = attempt * 2000;
+          log(`⏳ ${prefix} → tentativa ${attempt}/3 falhou, retry em ${wait/1000}s...`);
+          await sleep(wait);
+        }
       }
-      ok++;
-
-    } catch (err: any) {
-      console.error(`❌ ${prefix} → ERRO: ${err?.message || err}`);
+    }
+    if (!success) {
+      console.error(`❌ ${prefix} → ERRO (3 tentativas): ${lastErr?.message || lastErr}`);
       errors++;
     }
 

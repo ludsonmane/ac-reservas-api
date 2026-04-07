@@ -28,6 +28,7 @@ zigBillingRouter.get(
           id:              true,
           fullName:        true,
           tables:          true,
+          status:          true,
           reservationDate: true,
           unitId:          true,
           unitRef: { select: { slug: true, name: true } },
@@ -37,6 +38,15 @@ zigBillingRouter.get(
       if (!reservation) {
         return res.status(404).json({
           error: { code: 'RESERVATION_NOT_FOUND', message: 'Reserva não encontrada.' },
+        });
+      }
+
+      if (reservation.status !== 'CHECKED_IN') {
+        return res.status(422).json({
+          error: {
+            code:    'NOT_CHECKED_IN',
+            message: `Faturamento ZIG só pode ser consultado para reservas com check-in feito. Status atual: ${reservation.status}`,
+          },
         });
       }
 
