@@ -42,6 +42,36 @@ function periodWindow(dt: Date) {
   return { from: at(dt, 12, 0), to: at(dt, 17, 29, 59, 999) };
 }
 
+/**
+ * Primeiro instante permitido pra nova reserva em função do "agora".
+ * Regra: precisa ter 1 período de distância — se está na tarde, só noite pra frente;
+ * se está na noite, só a partir do meio-dia seguinte.
+ * Cálculo feito em BRT (UTC-3, sem DST) porque o servidor roda em UTC.
+ */
+const BRT_OFFSET_MS = -3 * 60 * 60 * 1000;
+function getMinReservationDate(now: Date): Date {
+  // now em BRT (componentes UTC desta Date = wall clock BRT)
+  const brt = new Date(now.getTime() + BRT_OFFSET_MS);
+  const y = brt.getUTCFullYear();
+  const m = brt.getUTCMonth();
+  const d = brt.getUTCDate();
+  const mins = brt.getUTCHours() * 60 + brt.getUTCMinutes();
+  // helper: monta Date absoluto a partir de wall clock BRT (BRT + 3h = UTC)
+  const brtAt = (yy: number, mm: number, dd: number, hh: number, mi: number) =>
+    new Date(Date.UTC(yy, mm, dd, hh + 3, mi, 0, 0));
+
+  if (mins < 12 * 60) {
+    // antes do meio-dia BRT: ainda não entrou em nenhum período → libera tarde de hoje
+    return brtAt(y, m, d, 12, 0);
+  }
+  if (mins < EVENING_CUTOFF_MIN) {
+    // dentro da tarde BRT → libera noite de hoje
+    return brtAt(y, m, d, 17, 30);
+  }
+  // dentro da noite BRT → libera tarde de amanhã
+  return brtAt(y, m, d + 1, 12, 0);
+}
+
 function genCode6() {
   const base = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sem 0/O/1/I
   let out = '';
@@ -268,6 +298,22 @@ router.post('/', async (req, res) => {
     }
     if (!reservationDate || !dayjs(reservationDate).isValid()) {
       return res.status(400).json({ error: { code: 'VALIDATION', message: 'reservationDate inválido.' } });
+    }
+
+    // regra de distância entre períodos: não dá pra reservar no mesmo período em que está
+    {
+      const dtCheck = new Date(reservationDate);
+      const minAllowed = getMinReservationDate(new Date());
+      if (dtCheck.getTime() < minAllowed.getTime()) {
+        return res.status(409).json({
+          error: {
+            code: 'PERIOD_TOO_SOON',
+            message:
+              'Só aceitamos reservas a partir do próximo período. Escolha um horário posterior ao atual.',
+            minReservationDate: minAllowed.toISOString(),
+          },
+        });
+      }
     }
 
     // normalizações
@@ -599,6 +645,20 @@ router.patch('/by-code/:code', async (req, res) => {
     if (peopleChanged || dateChanged || areaChanged || unitChanged) {
       if (!newAreaId || !newUnitId) {
         return res.status(400).json({ error: { code: 'VALIDATION', message: 'unitId/areaId obrigatórios para revalidar capacidade.' } });
+      }
+
+      if (dateChanged) {
+        const minAllowed = getMinReservationDate(new Date());
+        if (newDate.getTime() < minAllowed.getTime()) {
+          return res.status(409).json({
+            error: {
+              code: 'PERIOD_TOO_SOON',
+              message:
+                'Só aceitamos reservas a partir do próximo período. Escolha um horário posterior ao atual.',
+              minReservationDate: minAllowed.toISOString(),
+            },
+          });
+        }
       }
 
       // checa unit/area
