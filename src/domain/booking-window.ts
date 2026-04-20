@@ -1,12 +1,12 @@
 /**
  * Regra de janela de reservas (pública) — calculada em BRT (UTC-3, sem DST).
  *
- *   Agora (BRT) ∈ [00:00, 15:00] → só pode reservar ≥ jantar do MESMO dia (17:30+)
- *   Agora (BRT) ∈ [15:01, 23:59] → só pode reservar ≥ almoço do DIA SEGUINTE (12:00+)
+ *   Agora (BRT) ∈ [00:00, 17:29] (madrugada+tarde) → só pode reservar ≥ jantar do MESMO dia (17:30+)
+ *   Agora (BRT) ∈ [17:30, 23:59] (noite)           → só pode reservar ≥ almoço do DIA SEGUINTE (12:00+)
  *
  * Efeitos:
  *   - Almoço do próprio dia nunca é reservável.
- *   - Jantar do próprio dia fecha às 15:00.
+ *   - Jantar do próprio dia fecha às 17:30 (início do período da noite).
  *
  * O servidor roda em UTC; por isso fazemos shift explícito pra calcular
  * o wall-clock brasileiro antes de aplicar a regra.
@@ -14,12 +14,12 @@
 
 export type BookingPeriod = 'AFTERNOON' | 'NIGHT';
 
-const BRT_OFFSET_MS      = -3 * 60 * 60 * 1000;  // UTC-3
-const LUNCH_CLOSE_MINUTE = 15 * 60;              // 15:00 BRT — fim da janela diurna
-const EVENING_START_HH   = 17;
-const EVENING_START_MM   = 30;
-const LUNCH_START_HH     = 12;
-const LUNCH_START_MM     = 0;
+const BRT_OFFSET_MS        = -3 * 60 * 60 * 1000;  // UTC-3
+const EVENING_START_MINUTE = 17 * 60 + 30;         // 17:30 BRT — início da noite
+const EVENING_START_HH     = 17;
+const EVENING_START_MM     = 30;
+const LUNCH_START_HH       = 12;
+const LUNCH_START_MM       = 0;
 
 export interface EarliestBookable {
   date:   Date;
@@ -40,7 +40,7 @@ export function getEarliestBookable(now: Date = new Date()): EarliestBookable {
   const d    = brt.getUTCDate();
   const mins = brt.getUTCHours() * 60 + brt.getUTCMinutes();
 
-  if (mins <= LUNCH_CLOSE_MINUTE) {
+  if (mins < EVENING_START_MINUTE) {
     return {
       date:   brtAt(y, m, d, EVENING_START_HH, EVENING_START_MM),
       period: 'NIGHT',
