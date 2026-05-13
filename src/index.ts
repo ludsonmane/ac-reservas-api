@@ -2,11 +2,16 @@
 import http from 'http';
 import { buildServer } from './infrastructure/http/server';
 import { startZigBillingJobs } from './services/zig.billing.job';
+import { startAutoNoShowJob } from './services/auto-noshow.job';
 
 const app = buildServer();
 
 // Inicia jobs ZIG (só roda se ZIG_TOKEN estiver configurado)
 startZigBillingJobs();
+
+// Auto-NO_SHOW: marca reservas AWAITING_CHECKIN >24h após data como NO_SHOW.
+// Desativável via env AUTO_NOSHOW_DISABLED=true.
+startAutoNoShowJob();
 
 // Railway/Heroku/etc informam a porta via env.
 // NÃO hardcode — use process.env.PORT e 0.0.0.0
