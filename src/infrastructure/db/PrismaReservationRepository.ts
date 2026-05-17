@@ -148,7 +148,7 @@ export class PrismaReservationRepository implements ReservationRepository {
   }
 
   // ✅ unitId ESTRITO (sem legado quando informado) + to inclusivo + AND global
-  async findMany({ search, unit, unitId, areaId, from, to, skip, take }: FindManyParams) {
+  async findMany({ search, unit, unitId, areaId, from, to, dateField, skip, take }: FindManyParams) {
     const safeSkip = Math.max(0, Number(skip) || 0);
     const safeTake = Math.min(500, Math.max(1, Number(take) || 20));
     const q = (search ?? '').toString().trim();
@@ -235,11 +235,13 @@ export class PrismaReservationRepository implements ReservationRepository {
 
     // (4) Intervalo de datas — from/to já vêm normalizados pelo controller
     //     (date-only "YYYY-MM-DD" vira limite BRT; ISO completo é respeitado)
+    //     dateField escolhe entre reservationDate (default) ou createdAt
     if (isValidDate(from) || isValidDate(to)) {
       const range: Prisma.DateTimeFilter = {};
       if (isValidDate(from)) range.gte = from!;
       if (isValidDate(to))   range.lte = to!;
-      AND.push({ reservationDate: range });
+      const field = dateField === 'createdAt' ? 'createdAt' : 'reservationDate';
+      AND.push({ [field]: range } as Prisma.ReservationWhereInput);
     }
 
     const where: Prisma.ReservationWhereInput = AND.length ? { AND } : {};

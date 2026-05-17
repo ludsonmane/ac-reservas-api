@@ -15,6 +15,8 @@ export interface FindManyParams {
   to?: Date;
   /** Filtro por área (ID relacional) */
   areaId?: string; // ✅ NOVO
+  /** Campo de data usado em from/to: reservationDate (default) ou createdAt */
+  dateField?: 'reservationDate' | 'createdAt';
   /** Offset para paginação */
   skip: number;
   /** Limite (1..100) para paginação */

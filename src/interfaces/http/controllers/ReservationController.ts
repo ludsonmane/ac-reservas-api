@@ -249,6 +249,10 @@ export class ReservationController {
     const from = parseRangeDate(req.query.from, 'from');
     const to   = parseRangeDate(req.query.to, 'to');
 
+    const rawDateField = String(req.query.dateField || '').trim();
+    const dateField: 'reservationDate' | 'createdAt' =
+      rawDateField === 'createdAt' ? 'createdAt' : 'reservationDate';
+
     const { items, total } = await this.listUC.execute({
       search,
       unit,
@@ -256,6 +260,7 @@ export class ReservationController {
       areaId,
       from,
       to,
+      dateField,
       skip: (page - 1) * pageSize,
       take: pageSize,
     });
