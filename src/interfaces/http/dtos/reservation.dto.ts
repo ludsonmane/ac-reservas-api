@@ -74,5 +74,7 @@ export const UpdateReservationDTO = z.object({
   unit: z.string().trim().optional().nullable(),
 
   source: z.string().trim().optional().nullable(),
+
+  status: z.enum(['AWAITING_CHECKIN', 'CHECKED_IN', 'NO_SHOW']).optional(),
 });
 export type UpdateReservationInput = z.infer<typeof UpdateReservationDTO>;
