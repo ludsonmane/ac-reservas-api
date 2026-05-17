@@ -233,22 +233,12 @@ export class PrismaReservationRepository implements ReservationRepository {
     // (3) Filtro por área
     if (areaId) AND.push({ areaId });
 
-    // (4) Intervalo de datas — converte from/to para limites no timezone BRT
-    //     "from=2026-04-17" → início do dia em BRT = 2026-04-17T03:00:00.000Z
-    //     "to=2026-04-17"   → fim do dia em BRT    = 2026-04-18T02:59:59.999Z
+    // (4) Intervalo de datas — from/to já vêm normalizados pelo controller
+    //     (date-only "YYYY-MM-DD" vira limite BRT; ISO completo é respeitado)
     if (isValidDate(from) || isValidDate(to)) {
       const range: Prisma.DateTimeFilter = {};
-      if (isValidDate(from)) {
-        const f = new Date(from!);
-        f.setUTCHours(3, 0, 0, 0); // 00:00 BRT = 03:00 UTC
-        range.gte = f;
-      }
-      if (isValidDate(to)) {
-        const t = new Date(to!);
-        t.setUTCDate(t.getUTCDate() + 1);
-        t.setUTCHours(2, 59, 59, 999); // 23:59:59 BRT = 02:59:59 UTC (+1 day)
-        range.lte = t;
-      }
+      if (isValidDate(from)) range.gte = from!;
+      if (isValidDate(to))   range.lte = to!;
       AND.push({ reservationDate: range });
     }
 

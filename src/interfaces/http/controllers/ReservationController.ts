@@ -32,6 +32,27 @@ function parseDateMaybe(v: unknown): Date | undefined {
   const d = new Date(String(v));
   return Number.isNaN(+d) ? undefined : d;
 }
+/**
+ * Parse de from/to do filtro de período.
+ * - "YYYY-MM-DD" puro → normaliza pro limite do dia em BRT
+ *     from → 00:00 BRT (03:00 UTC)
+ *     to   → 23:59:59.999 BRT (02:59:59.999 UTC do dia seguinte)
+ * - ISO timestamp completo (com hora) → confia no cliente (já vem em UTC)
+ * Evita o bug de "somar 1 dia" quando o frontend já mandou o limite em UTC.
+ */
+function parseRangeDate(v: unknown, kind: 'from' | 'to'): Date | undefined {
+  if (v == null) return undefined;
+  const s = String(v).trim();
+  if (!s) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split('-').map(Number);
+    return kind === 'from'
+      ? new Date(Date.UTC(y, m - 1, d, 3, 0, 0, 0))
+      : new Date(Date.UTC(y, m - 1, d + 1, 2, 59, 59, 999));
+  }
+  const dt = new Date(s);
+  return Number.isNaN(+dt) ? undefined : dt;
+}
 /** Normaliza ID vindo na query: '', 'undefined', 'null' -> undefined */
 const asId = (v: unknown): string | undefined => {
   const s = String(v ?? '').trim();
@@ -225,8 +246,8 @@ export class ReservationController {
     const unitId = asId(req.query.unitId) ?? asId(req.query.unit_id);
     const areaId = asId(req.query.areaId) ?? asId(req.query.area_id);
 
-    const from = parseDateMaybe(req.query.from);
-    const to   = parseDateMaybe(req.query.to); // repositório trata "to" como inclusivo
+    const from = parseRangeDate(req.query.from, 'from');
+    const to   = parseRangeDate(req.query.to, 'to');
 
     const { items, total } = await this.listUC.execute({
       search,
