@@ -136,15 +136,25 @@ export function getPeriod(date: Date): ReservationPeriod {
 // ─── Janela de coleta ──────────────────────────────────────────────────────
 
 /**
- * Janela = 3h a partir do horário da reserva.
- * Regra de negócio: depois de 3h, considera-se que a mesa "virou" (mesmas pessoas
- * ou não — a reserva acabou). Quem chegou na mesa depois desse ponto não conta
- * pra essa reserva.
+ * Janela por mesa = 4h a partir da PRIMEIRA venda da mesa após reservationDate.
+ *
+ * Por quê por mesa: cliente atrasa pra jantar (BR típico). Reserva 19:30,
+ * cliente sentou 22:46 → janela 22:46→02:46 captura o consumo real. Cada mesa
+ * tem seu próprio pivot porque clientes diferentes podem sentar em horas
+ * diferentes mesmo dentro do mesmo grupo.
+ *
+ * Edge case aceito: se a mesa "virou" em <4h (almoço→jantar mesma mesa),
+ * o consumo da segunda família entra na primeira reserva. Raro o suficiente.
  */
-const WINDOW_HOURS = 3;
+const WINDOW_HOURS = 4;
 
-function windowEndFor(reservationStart: Date): Date {
-  return new Date(reservationStart.getTime() + WINDOW_HOURS * 60 * 60 * 1000);
+/**
+ * Upper bound do SQL pra não puxar dia inteiro: reservationDate + MAX_LATE_HOURS.
+ * Cobre cliente que atrasou MAX_LATE_HOURS e ainda ficou 4h.
+ */
+const MAX_LATE_HOURS = 8;
+function sqlUpperBoundFor(reservationStart: Date): Date {
+  return new Date(reservationStart.getTime() + (MAX_LATE_HOURS + WINDOW_HOURS) * 60 * 60 * 1000);
 }
 
 /**
@@ -268,7 +278,7 @@ export async function getZigBillingForReservation(
   date:            Date | string,
   unitSlug?:       string | null,
   lojaIdOverride?: string,
-  checkInTime?:    Date | string | null,
+  _checkInTime?:   Date | string | null,  // deprecated, mantido por compat
 ): Promise<ZigBillingResult> {
   const lojaId = lojaIdOverride || resolveLojaId(unitSlug);
 
@@ -278,19 +288,13 @@ export async function getZigBillingForReservation(
   const reservationDate = typeof date === 'string' ? new Date(date) : date;
   const period          = getPeriod(reservationDate);
 
-  // Pivot: hora do check-in se houver, senão hora da reserva.
-  // Cliente atrasado é a regra (jantar BR), não exceção.
-  const checkIn = checkInTime
-    ? (typeof checkInTime === 'string' ? new Date(checkInTime) : checkInTime)
-    : null;
-  const windowStart = checkIn ?? reservationDate;
-  const winEnd      = windowEndFor(windowStart);
-
-  // Filtros em SP local (matching o fuso do MySQL Zig Full).
-  const startSp = toSpLocalString(windowStart);
-  const endSp   = toSpLocalString(winEnd);
-  // ymd da reserva (não do check-in) pra exibição consistente com o painel
-  const ymd = toSpLocalString(reservationDate).slice(0, 10);
+  // SQL busca tudo nas mesas a partir do horário da reserva até um upper bound
+  // seguro (cliente pode atrasar várias horas). Pivot real por mesa = primeira
+  // venda encontrada — calculado em JS abaixo.
+  const sqlUpper = sqlUpperBoundFor(reservationDate);
+  const startSp  = toSpLocalString(reservationDate);
+  const endSp    = toSpLocalString(sqlUpper);
+  const ymd      = startSp.slice(0, 10);
 
   const pool = getZigMysqlPool();
   const [rows] = await pool.query<ZigProdutoRow[]>(
@@ -312,27 +316,36 @@ export async function getZigBillingForReservation(
   );
 
   const matcher = buildMesaMatcher(tables);
+  const windowMs = WINDOW_HOURS * 60 * 60 * 1000;
 
-  const byTableMap = new Map<string, ZigSaidaProduto[]>();
-  for (const t of tables) byTableMap.set(t, []);
-
-  let totalValueCents = 0;
+  // Agrupa por mesa (ordem natural já é por transaction_date ASC, então o
+  // primeiro item de cada mesa é o pivot da janela 4h).
+  const allByTable = new Map<string, ZigSaidaProduto[]>();
+  for (const t of tables) allByTable.set(t, []);
 
   for (const row of rows) {
     const mesa = matcher(row.obs);
     if (!mesa) continue;
-    const tx = rowToDto(row);
-    byTableMap.get(mesa)!.push(tx);
-    totalValueCents += tx.unitValue * tx.count - (tx.discountValue ?? 0);
+    allByTable.get(mesa)!.push(rowToDto(row));
   }
 
+  let totalValueCents = 0;
+
   const byTable = tables.map((table) => {
-    const txs        = byTableMap.get(table) ?? [];
-    const totalCents = txs.reduce(
+    const all = allByTable.get(table) ?? [];
+    if (all.length === 0) {
+      return { table, totalCents: 0, transactions: [] };
+    }
+    // Pivot = primeira venda; corta tudo após pivot + 4h
+    const pivot = new Date(all[0].transactionDate).getTime();
+    const cutoff = pivot + windowMs;
+    const inWindow = all.filter(tx => new Date(tx.transactionDate).getTime() <= cutoff);
+    const totalCents = inWindow.reduce(
       (acc, tx) => acc + tx.unitValue * tx.count - (tx.discountValue ?? 0),
       0,
     );
-    return { table, totalCents, transactions: txs };
+    totalValueCents += totalCents;
+    return { table, totalCents, transactions: inWindow };
   });
 
   const totalValueBRL = (totalValueCents / 100).toLocaleString('pt-BR', {
