@@ -49,6 +49,7 @@ export async function processZigBillingForPeriod(
       id:              true,
       tables:          true,
       reservationDate: true,
+      checkedInAt:     true,
       unitRef:         { select: { slug: true } },
     },
   });
@@ -68,6 +69,8 @@ export async function processZigBillingForPeriod(
         r.tables!,
         r.reservationDate,
         r.unitRef?.slug ?? null,
+        undefined,
+        r.checkedInAt,
       );
 
       await prisma.reservation.update({

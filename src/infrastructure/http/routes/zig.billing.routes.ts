@@ -30,6 +30,7 @@ zigBillingRouter.get(
           tables:          true,
           status:          true,
           reservationDate: true,
+          checkedInAt:     true,
           unitId:          true,
           unitRef: { select: { slug: true, name: true } },
         },
@@ -71,11 +72,13 @@ zigBillingRouter.get(
       const unitSlug = reservation.unitRef?.slug ?? null;
 
       // 2. Busca faturamento na ZIG
+      // Pivot da janela: checkedInAt se houver, senão reservationDate
       const billing = await getZigBillingForReservation(
         reservation.tables,
         reservation.reservationDate,
         unitSlug,
         lojaOverride,
+        reservation.checkedInAt,
       );
 
       // 3. Salva no banco (mesmo que seja R$ 0,00 — registra que foi consultado)

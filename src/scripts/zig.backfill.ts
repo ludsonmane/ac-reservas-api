@@ -75,6 +75,7 @@ async function main() {
       fullName:        true,
       tables:          true,
       reservationDate: true,
+      checkedInAt:     true,
       unitRef:         { select: { slug: true, name: true } },
     },
   });
@@ -104,6 +105,8 @@ async function main() {
           r.tables!,
           r.reservationDate,
           r.unitRef?.slug ?? null,
+          undefined,
+          r.checkedInAt,
         );
 
         if (dryRun) {

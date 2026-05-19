@@ -255,16 +255,20 @@ function rowToDto(row: ZigProdutoRow): ZigSaidaProduto {
 /**
  * Retorna o faturamento das mesas de uma reserva.
  *
- * @param tablesCsv  CSV de mesas, ex.: "321,322,323"
- * @param date       Data/hora da reserva (start da janela)
- * @param unitSlug   Slug da unidade — resolve loja_id (UUID Zig)
- * @param lojaIdOverride  UUID literal (override)
+ * @param tablesCsv     CSV de mesas, ex.: "321,322,323"
+ * @param date          Data/hora da reserva (fallback de pivot da janela)
+ * @param unitSlug      Slug da unidade — resolve loja_id (UUID Zig)
+ * @param lojaIdOverride UUID literal (override)
+ * @param checkInTime   Se a reserva tem check-in marcado, usa este horário como
+ *                      início da janela 3h (mais preciso que o horário marcado).
+ *                      Resolve casos onde o cliente chega atrasado pro jantar.
  */
 export async function getZigBillingForReservation(
   tablesCsv:       string,
   date:            Date | string,
   unitSlug?:       string | null,
   lojaIdOverride?: string,
+  checkInTime?:    Date | string | null,
 ): Promise<ZigBillingResult> {
   const lojaId = lojaIdOverride || resolveLojaId(unitSlug);
 
@@ -273,13 +277,20 @@ export async function getZigBillingForReservation(
 
   const reservationDate = typeof date === 'string' ? new Date(date) : date;
   const period          = getPeriod(reservationDate);
-  const winEnd          = windowEndFor(reservationDate);
+
+  // Pivot: hora do check-in se houver, senão hora da reserva.
+  // Cliente atrasado é a regra (jantar BR), não exceção.
+  const checkIn = checkInTime
+    ? (typeof checkInTime === 'string' ? new Date(checkInTime) : checkInTime)
+    : null;
+  const windowStart = checkIn ?? reservationDate;
+  const winEnd      = windowEndFor(windowStart);
 
   // Filtros em SP local (matching o fuso do MySQL Zig Full).
-  const startSp = toSpLocalString(reservationDate);
+  const startSp = toSpLocalString(windowStart);
   const endSp   = toSpLocalString(winEnd);
-  // ymd em SP local pra alinhar com event_date (DATE) e com o título do painel
-  const ymd = startSp.slice(0, 10);
+  // ymd da reserva (não do check-in) pra exibição consistente com o painel
+  const ymd = toSpLocalString(reservationDate).slice(0, 10);
 
   const pool = getZigMysqlPool();
   const [rows] = await pool.query<ZigProdutoRow[]>(
