@@ -136,19 +136,35 @@ export function getPeriod(date: Date): ReservationPeriod {
 // ─── Janela de coleta ──────────────────────────────────────────────────────
 
 /**
- * Fim da janela: 06:00 (America/Sao_Paulo) do dia seguinte ao event_date da reserva.
- * Captura jantar + madrugada típicos (mesa que fecha 03h ainda entra).
- *
- * O start é o próprio horário da reserva (não 00:00 do dia) pra evitar pegar
- * vendas avulsas que aconteceram antes da reserva mesmo na mesma mesa.
+ * Janela = 3h a partir do horário da reserva.
+ * Regra de negócio: depois de 3h, considera-se que a mesa "virou" (mesmas pessoas
+ * ou não — a reserva acabou). Quem chegou na mesa depois desse ponto não conta
+ * pra essa reserva.
  */
-const WINDOW_END_HOUR_LOCAL = 6;
+const WINDOW_HOURS = 3;
 
-function windowEndFor(reservationDate: Date): Date {
-  const end = new Date(reservationDate);
-  end.setDate(end.getDate() + 1);
-  end.setHours(WINDOW_END_HOUR_LOCAL, 0, 0, 0);
-  return end;
+function windowEndFor(reservationStart: Date): Date {
+  return new Date(reservationStart.getTime() + WINDOW_HOURS * 60 * 60 * 1000);
+}
+
+/**
+ * Formata um Date como string "YYYY-MM-DD HH:mm:ss" no fuso America/Sao_Paulo
+ * pra mandar pro MySQL Zig Full (cujos transaction_date são em SP local sem fuso).
+ *
+ * mysql2 com `timezone:'Z'` enviaria UTC, o que causaria offset de 3h no filtro.
+ */
+function toSpLocalString(d: Date): string {
+  // 'sv-SE' formata como "YYYY-MM-DD HH:mm:ss" naturalmente
+  return new Intl.DateTimeFormat('sv-SE', {
+    timeZone: 'America/Sao_Paulo',
+    year:   'numeric',
+    month:  '2-digit',
+    day:    '2-digit',
+    hour:   '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(d);
 }
 
 // ─── Match obs → mesa ──────────────────────────────────────────────────────
@@ -256,9 +272,14 @@ export async function getZigBillingForReservation(
   if (tables.length === 0) throw new Error('[ZIG] A reserva não possui mesas vinculadas.');
 
   const reservationDate = typeof date === 'string' ? new Date(date) : date;
-  const ymd     = reservationDate.toISOString().slice(0, 10);
-  const period  = getPeriod(reservationDate);
-  const winEnd  = windowEndFor(reservationDate);
+  const period          = getPeriod(reservationDate);
+  const winEnd          = windowEndFor(reservationDate);
+
+  // Filtros em SP local (matching o fuso do MySQL Zig Full).
+  const startSp = toSpLocalString(reservationDate);
+  const endSp   = toSpLocalString(winEnd);
+  // ymd em SP local pra alinhar com event_date (DATE) e com o título do painel
+  const ymd = startSp.slice(0, 10);
 
   const pool = getZigMysqlPool();
   const [rows] = await pool.query<ZigProdutoRow[]>(
@@ -276,7 +297,7 @@ export async function getZigBillingForReservation(
       AND obs LIKE 'Mesa:%'
     ORDER BY transaction_date ASC
     `,
-    [lojaId, reservationDate, winEnd],
+    [lojaId, startSp, endSp],
   );
 
   const matcher = buildMesaMatcher(tables);
