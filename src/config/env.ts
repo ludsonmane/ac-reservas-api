@@ -62,9 +62,17 @@ const envSchema = z.object({
   NPM_CONFIG_CACHE:           z.string().optional(),
 
   // ─── ZIG (faturamento por mesa) ───────────────────────────────────────────
-  // Adicione estas duas no Railway para ativar o endpoint /v1/zig/billing
-  ZIG_TOKEN:    z.string().optional(),   // token de integração ZIG
-  ZIG_LOJA_MAP: z.string().optional(),   // JSON: {"bsb":"111","aguas-claras":"222"}
+  // Fonte de dados: MySQL "Zig Mané DB FULL" (Railway), populado pelo cron zig-backfill.
+  // ZIG_MYSQL_URL: mysql://root:pass@host:port/railway
+  //   - prod (Railway): mysql://root:***@mysql-b648.railway.internal:3306/railway
+  //   - dev  (local):   mysql://root:***@yamanote.proxy.rlwy.net:55408/railway
+  // ZIG_LOJA_MAP: JSON {"<unitSlug>":"<loja_id UUID>"}, ex.:
+  //   {"bsb":"1d02dc84-...","aguas-claras":"5e63ab17-...","sp":"b0dbc86c-..."}
+  ZIG_MYSQL_URL: z.string().optional(),
+  ZIG_LOJA_MAP:  z.string().optional(),
+
+  // Legado (mantido por compat — não usado pelo novo zig.service.ts)
+  ZIG_TOKEN:    z.string().optional(),
   ZIG_BASE_URL: z.string().url().optional().default('https://api.zigcore.com.br/integration'),
 });
 

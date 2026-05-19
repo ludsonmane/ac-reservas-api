@@ -59,11 +59,11 @@ zigBillingRouter.get(
         });
       }
 
-      if (!process.env.ZIG_TOKEN) {
+      if (!process.env.ZIG_MYSQL_URL) {
         return res.status(503).json({
           error: {
             code:    'ZIG_NOT_CONFIGURED',
-            message: 'Integração ZIG não configurada. Defina ZIG_TOKEN e ZIG_LOJA_MAP no Railway.',
+            message: 'Integração ZIG não configurada. Defina ZIG_MYSQL_URL no Railway.',
           },
         });
       }

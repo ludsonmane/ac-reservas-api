@@ -44,11 +44,11 @@ async function main() {
 
   log(`Iniciando backfill — modo: ${dryRun ? 'DRY-RUN' : 'REAL'}, período: ${allTime ? 'TODAS' : `últimos ${days} dias`}`);
 
-  // Filtro: CHECKED_IN com mesas, sem faturamento Manezin ainda
+  // Filtro: CHECKED_IN com mesas, sem faturamento ZIG ainda
   const where: any = {
-    tables:              { not: null },
-    manezinBillingCents: null,
-    status:              'CHECKED_IN',
+    tables:          { not: null },
+    zigBillingCents: null,
+    status:          'CHECKED_IN',
   };
 
   // Filtro por unidade (--unit=mane-west-plaza-sp)
@@ -109,9 +109,8 @@ async function main() {
           await prisma.reservation.update({
             where: { id: r.id },
             data: {
-              manezinBillingCents: billing.totalValueCents,
-              manezinBilledAt:     new Date(),
-              manezinTxCount:      billing.transactions.length,
+              zigBillingCents: billing.totalValueCents,
+              zigBilledAt:     new Date(),
             },
           });
           log(`✅ ${prefix} → ${billing.totalValueBRL} (${billing.transactions.length} tx, período: ${billing.period})`);

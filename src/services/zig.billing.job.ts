@@ -27,8 +27,8 @@ export async function processZigBillingForPeriod(
   targetDate: Date,
   period: 'AFTERNOON' | 'NIGHT',
 ): Promise<{ processed: number; errors: number }> {
-  if (!process.env.ZIG_TOKEN || !process.env.ZIG_LOJA_MAP) {
-    log('ZIG_TOKEN ou ZIG_LOJA_MAP não configurados — job ignorado.');
+  if (!process.env.ZIG_MYSQL_URL) {
+    log('ZIG_MYSQL_URL não configurada — job ignorado.');
     return { processed: 0, errors: 0 };
   }
 
@@ -137,8 +137,8 @@ function scheduleDailyAt(hour: number, minute: number, job: () => Promise<void>)
 // ─── Registro ─────────────────────────────────────────────────────────────────
 
 export function startZigBillingJobs() {
-  if (!process.env.ZIG_TOKEN) {
-    console.log('[zig-job] ZIG_TOKEN não configurado — jobs não iniciados.');
+  if (!process.env.ZIG_MYSQL_URL) {
+    console.log('[zig-job] ZIG_MYSQL_URL não configurada — jobs não iniciados.');
     return;
   }
 

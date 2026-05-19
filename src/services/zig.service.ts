@@ -1,75 +1,76 @@
 /**
  * src/services/zig.service.ts
  *
- * Integração com a API Manezin (manezin.com.br/api/externo).
- * Busca transações de consumo por mesa e período.
+ * Faturamento ZIG por mesa da reserva — fonte: MySQL "Zig Mané DB FULL" (Railway).
  *
- * Responsabilidades:
- *  - Encapsular as chamadas HTTP ao Manezin
- *  - Resolver o complexo correto por slug da unidade
- *  - Filtrar vendas pelo número de mesa (campo `obs`: "Mesa: XXX")
- *  - Janela de consumo: horário da reserva → +3 horas
+ * Substitui a integração antiga via API Manezin externa:
+ *   - Fonte de dados estruturada (sem rate-limit, sem dependência de uptime externo)
+ *   - Janela: reservationStart → 06:00 do dia seguinte (cobre jantares longos)
+ *   - Match estrito por obs="Mesa: N" e variantes (ex.: "Mesa: 321 - Aniversário")
+ *
+ * Limitação atual: o cron zig-backfill roda 1×/dia (~04h). Faturamento do MESMO
+ * dia só aparece após o sync da madrugada.
  */
 
-import https from 'https';
-import http from 'http';
+import { getZigMysqlPool } from '../infrastructure/db/zig-mysql';
+import type { RowDataPacket } from 'mysql2/promise';
 
-// ─── Configuração ────────────────────────────────────────────────────────────
+// ─── Mapeamento unitSlug → loja_id (UUID Zig) ─────────────────────────────────
 
-const MANEZIN_BASE = 'https://manezin.com.br/api/externo';
-const MANEZIN_TOKEN = process.env.MANEZIN_TOKEN || process.env.ZIG_TOKEN || '';
-
-/**
- * Mapa slug-da-unidade → complexo Manezin.
- * Complexos disponíveis: BSB, AC, SP
- */
-const UNIT_TO_COMPLEXO: Record<string, string> = {
-  'mane-bsb': 'BSB',
-  'bsb': 'BSB',
-  'mane-aguas-claras': 'AC',
-  'aguas-claras': 'AC',
-  'ac': 'AC',
-  'mane-west-plaza-sp': 'SP',
-  'sp': 'SP',
+const DEFAULT_LOJA_MAP: Record<string, string> = {
+  'bsb':                '1d02dc84-e124-42e2-81f2-ba83233080a2',
+  'mane-bsb':           '1d02dc84-e124-42e2-81f2-ba83233080a2',
+  'ac':                 '5e63ab17-f911-44b5-aa8d-0d58eb9a2a4a',
+  'aguas-claras':       '5e63ab17-f911-44b5-aa8d-0d58eb9a2a4a',
+  'mane-aguas-claras':  '5e63ab17-f911-44b5-aa8d-0d58eb9a2a4a',
+  'sp':                 'b0dbc86c-7e27-4a84-b934-1bf5ad52711a',
+  'mane-west-plaza-sp': 'b0dbc86c-7e27-4a84-b934-1bf5ad52711a',
 };
 
-/**
- * Resolve o complexo Manezin para um slug de unidade.
- */
-export function resolveComplexo(unitSlug: string | null | undefined): string {
-  if (unitSlug) {
-    const normalized = unitSlug
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/\s+/g, '-')
-      .trim();
+function normalizeSlug(slug: string): string {
+  return slug
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, '-')
+    .trim();
+}
 
-    if (UNIT_TO_COMPLEXO[normalized]) return UNIT_TO_COMPLEXO[normalized];
-    if (UNIT_TO_COMPLEXO[unitSlug]) return UNIT_TO_COMPLEXO[unitSlug];
-
-    // Tenta match parcial
-    for (const [key, val] of Object.entries(UNIT_TO_COMPLEXO)) {
-      if (normalized.includes(key) || key.includes(normalized)) return val;
-    }
+function getLojaMap(): Record<string, string> {
+  const raw = process.env.ZIG_LOJA_MAP;
+  if (!raw) return DEFAULT_LOJA_MAP;
+  try {
+    const parsed = JSON.parse(raw);
+    const normalized: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) normalized[normalizeSlug(k)] = String(v);
+    return { ...DEFAULT_LOJA_MAP, ...normalized };
+  } catch {
+    console.warn('[zig] ZIG_LOJA_MAP inválido — usando default');
+    return DEFAULT_LOJA_MAP;
   }
+}
 
+export function resolveLojaId(unitSlug: string | null | undefined): string {
+  if (!unitSlug) throw new Error('[ZIG] unitSlug ausente — não é possível resolver loja_id');
+  const map = getLojaMap();
+  const normalized = normalizeSlug(unitSlug);
+  if (map[normalized]) return map[normalized];
+  if (map[unitSlug]) return map[unitSlug];
+  for (const [k, v] of Object.entries(map)) {
+    if (normalized.includes(k) || k.includes(normalized)) return v;
+  }
   throw new Error(
-    `[MANEZIN] Nenhum complexo encontrado para a unidade "${unitSlug}". ` +
-    `Complexos disponíveis: BSB, AC, SP`,
+    `[ZIG] Nenhum loja_id encontrado para unitSlug "${unitSlug}". ` +
+    `Defina ZIG_LOJA_MAP ou ajuste DEFAULT_LOJA_MAP.`,
   );
 }
 
-// Mantém compat com imports existentes
-export function resolveLojaId(unitSlug: string | null | undefined): string {
-  return resolveComplexo(unitSlug);
+// Compat com chamadores antigos (esperam string label tipo "BSB")
+export function resolveComplexo(unitSlug: string | null | undefined): string {
+  return resolveLojaId(unitSlug);
 }
 
-function assertToken() {
-  if (!MANEZIN_TOKEN) throw new Error('[MANEZIN] Variável MANEZIN_TOKEN (ou ZIG_TOKEN) não configurada');
-}
-
-// ─── Tipos ──────────────────────────────────────────────────────────────────
+// ─── Tipos públicos (preservam o contrato anterior) ─────────────────────────
 
 export type ZigAddition = {
   productId:  string;
@@ -97,12 +98,14 @@ export type ZigSaidaProduto = {
   invoiceId?:        string | null;
   employeeName?:     string;
   type?:             string;
-  obs?:              string | null;   // ← "Mesa: XXX"
+  obs?:              string | null;
   barId?:            string | null;
   barName?:          string | null;
   isRefunded?:       boolean;
   additions:         ZigAddition[];
 };
+
+export type ReservationPeriod = 'AFTERNOON' | 'NIGHT';
 
 export type ZigBillingResult = {
   tables:           string[];
@@ -116,189 +119,130 @@ export type ZigBillingResult = {
   }[];
   date:      string;
   period:    ReservationPeriod;
-  lojaId:    string;        // complexo (BSB/AC/SP)
+  lojaId:    string;
   unitSlug?: string;
 };
 
-// ─── HTTP helper ─────────────────────────────────────────────────────────────
-
-async function manezinGet<T>(path: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const fullUrl = `${MANEZIN_BASE}${path}`;
-    const url     = new URL(fullUrl);
-    const lib     = url.protocol === 'https:' ? https : http;
-
-    const options = {
-      hostname: url.hostname,
-      port:     url.port || (url.protocol === 'https:' ? 443 : 80),
-      path:     url.pathname + url.search,
-      method:   'GET',
-      headers: {
-        Authorization: `Bearer ${MANEZIN_TOKEN}`,
-        Accept:        'application/json',
-      },
-    };
-
-    const req = lib.request(options, (res) => {
-      let raw = '';
-      res.setEncoding('utf8');
-      res.on('data', (chunk) => (raw += chunk));
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(raw);
-          if ((res.statusCode ?? 0) >= 400) {
-            reject(new Error(`[MANEZIN] HTTP ${res.statusCode}: ${raw.slice(0, 300)}`));
-          } else {
-            resolve(parsed as T);
-          }
-        } catch {
-          reject(new Error(`[MANEZIN] JSON parse error: ${raw.slice(0, 300)}`));
-        }
-      });
-    });
-
-    req.on('error', (e) => reject(new Error(`[MANEZIN] Request error: ${e.message}`)));
-    req.setTimeout(30_000, () => {
-      req.destroy();
-      reject(new Error('[MANEZIN] Request timeout'));
-    });
-    req.end();
-  });
-}
-
-// ─── Chamadas ao Manezin ────────────────────────────────────────────────────
-
-export async function fetchSaidaProdutos(
-  dtinicio: string,
-  dtfim:    string,
-  complexo: string,
-): Promise<ZigSaidaProduto[]> {
-  assertToken();
-
-  const all: ZigSaidaProduto[] = [];
-  let offset = 0;
-  const limit = 10000;
-
-  // Pagina até trazer tudo
-  while (true) {
-    const path = `/transacoes?data_inicio=${dtinicio}&data_fim=${dtfim}&complexo=${complexo}&limit=${limit}&offset=${offset}`;
-    const res = await manezinGet<{ data: any[]; total: number }>(path);
-    const items = res?.data ?? [];
-
-    for (const item of items) {
-      all.push({
-        transactionId:   item.transactionId || item.transaction_id || '',
-        transactionDate: item.transactionDate || item.transaction_date || '',
-        productId:       item.productId || item.product_id || '',
-        productSku:      item.productSku || item.product_sku || '',
-        unitValue:       Number(item.unitValue ?? item.unit_value ?? 0),
-        count:           Number(item.count ?? item.quantidade ?? 1),
-        fractionalAmount: item.fractionalAmount ?? item.fractional_amount ?? null,
-        fractionUnit:    item.fractionUnit ?? item.fraction_unit ?? null,
-        discountValue:   Number(item.discountValue ?? item.discount_value ?? 0),
-        productName:     item.productName || item.product_name || '',
-        productCategory: item.productCategory || item.product_category || '',
-        redeId:          item.redeId || item.rede_id || '',
-        lojaId:          item.lojaId || item.loja_id || '',
-        eventId:         item.eventId || item.event_id || '',
-        eventName:       item.eventName || item.event_name || '',
-        eventDate:       item.eventDate || item.event_date || '',
-        invoiceId:       item.invoiceId || item.invoice_id || null,
-        employeeName:    item.employeeName || item.employee_name || '',
-        type:            item.type || '',
-        obs:             item.obs || null,
-        barId:           item.barId || item.bar_id || null,
-        barName:         item.barName || item.bar_name || null,
-        isRefunded:      item.isRefunded ?? item.is_refunded ?? false,
-        additions:       item.additions || [],
-      });
-    }
-
-    if (items.length < limit) break; // Última página
-    offset += limit;
-  }
-
-  // Filtra estornos
-  return all.filter(tx => !tx.isRefunded);
-}
-
-// ─── Lógica de match por mesa ─────────────────────────────────────────────────
-
-function normalizeMesa(raw: string): string {
-  return raw.replace(/[^0-9]/g, '').replace(/^0+/, '') || raw.trim();
-}
-
-function fieldMatchesMesa(field: string | null | undefined, mesaNum: string): boolean {
-  if (!field) return false;
-  const normalized = normalizeMesa(field);
-  if (normalized === mesaNum) return true;
-  // "Mesa: 321", "Mesa:321", "mesa 321", "tab-321", "bar_321"
-  const regex = new RegExp(`(?:mesa|tab|bar)[:\\s\\-_]*0*${mesaNum}\\b`, 'i');
-  if (regex.test(field)) return true;
-  // Fallback: número isolado
-  const numRegex = new RegExp(`(?<![0-9])0*${mesaNum}(?![0-9])`);
-  return numRegex.test(field);
-}
-
-function matchTransactionToTable(tx: ZigSaidaProduto, tables: string[]): string | null {
-  for (const mesa of tables) {
-    const mesaNum = normalizeMesa(mesa);
-    if (fieldMatchesMesa(tx.obs, mesaNum))     return mesa;
-    if (fieldMatchesMesa(tx.barName, mesaNum)) return mesa;
-  }
-  return null;
-}
-
-// ─── Janela de coleta de consumo ─────────────────────────────────────────────
-
-/**
- * Janela: horário da reserva → horário da reserva + WINDOW_HOURS.
- *
- * Exemplos:
- *   Reserva 12:00 → coleta 12:00–15:00
- *   Reserva 19:00 → coleta 19:00–22:00
- *   Reserva 13:30 → coleta 13:30–16:30
- */
-const WINDOW_HOURS = 3;
-
-export type ReservationPeriod = 'AFTERNOON' | 'NIGHT';
+// ─── Período (preservado pra zig.billing.job.ts) ────────────────────────────
 
 const EVENING_CUTOFF_HOUR   = 17;
 const EVENING_CUTOFF_MINUTE = 30;
 
 export function getPeriod(date: Date): ReservationPeriod {
-  const h = date.getHours();
-  const m = date.getMinutes();
-  const totalMin = h * 60 + m;
+  const totalMin = date.getHours() * 60 + date.getMinutes();
   return totalMin >= EVENING_CUTOFF_HOUR * 60 + EVENING_CUTOFF_MINUTE ? 'NIGHT' : 'AFTERNOON';
 }
 
+// ─── Janela de coleta ──────────────────────────────────────────────────────
+
 /**
- * Filtra uma transação pela janela da reserva:
- * desde o horário da reserva até +WINDOW_HOURS horas depois.
+ * Fim da janela: 06:00 (America/Sao_Paulo) do dia seguinte ao event_date da reserva.
+ * Captura jantar + madrugada típicos (mesa que fecha 03h ainda entra).
+ *
+ * O start é o próprio horário da reserva (não 00:00 do dia) pra evitar pegar
+ * vendas avulsas que aconteceram antes da reserva mesmo na mesma mesa.
  */
-function txInWindow(transactionDate: string, reservationDate: Date): boolean {
-  try {
-    const tx = new Date(transactionDate);
-    const windowStart = reservationDate.getTime();
-    const windowEnd   = windowStart + WINDOW_HOURS * 60 * 60 * 1000;
-    const txTime      = tx.getTime();
-    return txTime >= windowStart && txTime <= windowEnd;
-  } catch {
-    return false;
-  }
+const WINDOW_END_HOUR_LOCAL = 6;
+
+function windowEndFor(reservationDate: Date): Date {
+  const end = new Date(reservationDate);
+  end.setDate(end.getDate() + 1);
+  end.setHours(WINDOW_END_HOUR_LOCAL, 0, 0, 0);
+  return end;
 }
 
-// ─── Função principal ─────────────────────────────────────────────────────────
+// ─── Match obs → mesa ──────────────────────────────────────────────────────
+
+function normalizeMesaNum(raw: string): string {
+  const digits = raw.replace(/[^0-9]/g, '');
+  return digits.replace(/^0+/, '') || digits || raw.trim();
+}
 
 /**
- * Retorna o faturamento para as mesas de uma reserva via API Manezin,
- * filtrado pela janela de consumo: horário da reserva → +3 horas.
+ * Indexa um conjunto de mesas pra lookup O(1) durante a varredura.
+ * Aceita exatamente "Mesa: N" e variantes "Mesa: N - <sufixo>" ou "Mesa: N <sufixo>".
+ */
+function buildMesaMatcher(tables: string[]): (obs: string | null) => string | null {
+  const byNum = new Map<string, string>();  // "321" → mesa original (ex.: "321")
+  for (const m of tables) byNum.set(normalizeMesaNum(m), m);
+
+  const exactRe   = /^Mesa:\s*(\d+)$/;
+  const prefixRe  = /^Mesa:\s*(\d+)(?:\s|$|-)/;
+
+  return (obs) => {
+    if (!obs) return null;
+    let match = exactRe.exec(obs);
+    if (!match) match = prefixRe.exec(obs);
+    if (!match) return null;
+    const num = normalizeMesaNum(match[1]);
+    return byNum.get(num) ?? null;
+  };
+}
+
+// ─── Query principal ──────────────────────────────────────────────────────
+
+type ZigProdutoRow = RowDataPacket & {
+  transaction_id:    string;
+  transaction_date:  Date;
+  product_id:        string;
+  product_sku:       string | null;
+  product_name:      string;
+  product_category:  string | null;
+  unit_value:        number;
+  count:             number;
+  fractional_amount: number | null;
+  fraction_unit:     string | null;
+  discount_value:    number;
+  type:              string | null;
+  employee_name:     string | null;
+  bar_id:            string | null;
+  bar_name:          string | null;
+  obs:               string | null;
+  rede_id:           string | null;
+  loja_id:           string;
+  event_id:          string | null;
+  event_date:        Date | null;
+  invoice_id:        string | null;
+};
+
+function rowToDto(row: ZigProdutoRow): ZigSaidaProduto {
+  return {
+    transactionId:    row.transaction_id,
+    transactionDate:  row.transaction_date instanceof Date
+      ? row.transaction_date.toISOString()
+      : String(row.transaction_date),
+    productId:        row.product_id,
+    productSku:       row.product_sku ?? '',
+    unitValue:        Number(row.unit_value ?? 0),
+    count:            Number(row.count ?? 1),
+    fractionalAmount: row.fractional_amount,
+    fractionUnit:     row.fraction_unit,
+    discountValue:    Number(row.discount_value ?? 0),
+    productName:      row.product_name,
+    productCategory:  row.product_category ?? '',
+    redeId:           row.rede_id ?? '',
+    lojaId:           row.loja_id,
+    eventId:          row.event_id ?? '',
+    eventName:        '',
+    eventDate:        row.event_date ? row.event_date.toISOString().slice(0, 10) : '',
+    invoiceId:        row.invoice_id,
+    employeeName:     row.employee_name ?? '',
+    type:             row.type ?? '',
+    obs:              row.obs,
+    barId:            row.bar_id,
+    barName:          row.bar_name,
+    isRefunded:       false,
+    additions:        [],
+  };
+}
+
+/**
+ * Retorna o faturamento das mesas de uma reserva.
  *
- * @param tablesCsv       CSV de mesas (ex.: "321,322,323")
- * @param date            Data/hora da reserva
- * @param unitSlug        Slug da unidade — usado para resolver o complexo
- * @param lojaIdOverride  Override manual do complexo (ignora mapa)
+ * @param tablesCsv  CSV de mesas, ex.: "321,322,323"
+ * @param date       Data/hora da reserva (start da janela)
+ * @param unitSlug   Slug da unidade — resolve loja_id (UUID Zig)
+ * @param lojaIdOverride  UUID literal (override)
  */
 export async function getZigBillingForReservation(
   tablesCsv:       string,
@@ -306,47 +250,57 @@ export async function getZigBillingForReservation(
   unitSlug?:       string | null,
   lojaIdOverride?: string,
 ): Promise<ZigBillingResult> {
-  assertToken();
-
-  const complexo = lojaIdOverride || resolveComplexo(unitSlug);
+  const lojaId = lojaIdOverride || resolveLojaId(unitSlug);
 
   const tables = tablesCsv.split(',').map((t) => t.trim()).filter(Boolean);
-  if (tables.length === 0) throw new Error('A reserva não possui mesas vinculadas.');
+  if (tables.length === 0) throw new Error('[ZIG] A reserva não possui mesas vinculadas.');
 
-  const d      = typeof date === 'string' ? new Date(date) : date;
-  const ymd    = d.toISOString().slice(0, 10);
-  const period = getPeriod(d);
+  const reservationDate = typeof date === 'string' ? new Date(date) : date;
+  const ymd     = reservationDate.toISOString().slice(0, 10);
+  const period  = getPeriod(reservationDate);
+  const winEnd  = windowEndFor(reservationDate);
 
-  // Calcula o fim da janela (+3h) — se cruzar a meia-noite, busca também o dia seguinte
-  const windowEnd = new Date(d.getTime() + WINDOW_HOURS * 60 * 60 * 1000);
-  const windowEndYmd = windowEnd.toISOString().slice(0, 10);
-  const dtfim = windowEndYmd > ymd ? windowEndYmd : ymd;
+  const pool = getZigMysqlPool();
+  const [rows] = await pool.query<ZigProdutoRow[]>(
+    `
+    SELECT
+      transaction_id, transaction_date, product_id, product_sku,
+      product_name, product_category, unit_value, \`count\`,
+      fractional_amount, fraction_unit, discount_value, type,
+      employee_name, bar_id, bar_name, obs, rede_id, loja_id,
+      event_id, event_date, invoice_id
+    FROM zig_produtos
+    WHERE loja_id = ?
+      AND transaction_date >= ?
+      AND transaction_date <  ?
+      AND obs LIKE 'Mesa:%'
+    ORDER BY transaction_date ASC
+    `,
+    [lojaId, reservationDate, winEnd],
+  );
 
-  const allTx = await fetchSaidaProdutos(ymd, dtfim, complexo);
+  const matcher = buildMesaMatcher(tables);
 
-  // Filtra pela janela: horário da reserva → +3h
-  const periodTx = allTx.filter((tx) => txInWindow(tx.transactionDate, d));
-
-  // Agrupa por mesa
   const byTableMap = new Map<string, ZigSaidaProduto[]>();
-  for (const mesa of tables) byTableMap.set(mesa, []);
+  for (const t of tables) byTableMap.set(t, []);
 
   let totalValueCents = 0;
 
-  for (const tx of periodTx) {
-    const mesa = matchTransactionToTable(tx, tables);
+  for (const row of rows) {
+    const mesa = matcher(row.obs);
     if (!mesa) continue;
+    const tx = rowToDto(row);
     byTableMap.get(mesa)!.push(tx);
     totalValueCents += tx.unitValue * tx.count - (tx.discountValue ?? 0);
   }
 
-  const byTable = tables.map((mesa) => {
-    const txList     = byTableMap.get(mesa) ?? [];
-    const totalCents = txList.reduce(
+  const byTable = tables.map((table) => {
+    const txs        = byTableMap.get(table) ?? [];
+    const totalCents = txs.reduce(
       (acc, tx) => acc + tx.unitValue * tx.count - (tx.discountValue ?? 0),
       0,
     );
-    return { table: mesa, totalCents, transactions: txList };
+    return { table, totalCents, transactions: txs };
   });
 
   const totalValueBRL = (totalValueCents / 100).toLocaleString('pt-BR', {
@@ -361,7 +315,7 @@ export async function getZigBillingForReservation(
     byTable,
     date:    ymd,
     period,
-    lojaId:  complexo,
+    lojaId,
     unitSlug: unitSlug ?? undefined,
   };
 }
