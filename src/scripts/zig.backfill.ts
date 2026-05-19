@@ -20,6 +20,7 @@ import { getZigBillingForReservation } from '../services/zig.service';
 const args      = process.argv.slice(2);
 const dryRun    = args.includes('--dry-run');
 const allTime   = args.includes('--all');
+const force     = args.includes('--force');   // recalcula mesmo com zigBillingCents já preenchido
 const daysArg   = args.find(a => a.startsWith('--days='));
 const days      = daysArg ? parseInt(daysArg.split('=')[1], 10) : 30;
 const unitArg   = args.find(a => a.startsWith('--unit='))?.split('=')[1] || '';
@@ -37,19 +38,21 @@ function sleep(ms: number) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  if (!process.env.ZIG_TOKEN || !process.env.ZIG_LOJA_MAP) {
-    console.error('[backfill] ❌ ZIG_TOKEN ou ZIG_LOJA_MAP não configurados. Abortando.');
+  if (!process.env.ZIG_MYSQL_URL) {
+    console.error('[backfill] ❌ ZIG_MYSQL_URL não configurada. Abortando.');
     process.exit(1);
   }
 
-  log(`Iniciando backfill — modo: ${dryRun ? 'DRY-RUN' : 'REAL'}, período: ${allTime ? 'TODAS' : `últimos ${days} dias`}`);
+  log(`Iniciando backfill — modo: ${dryRun ? 'DRY-RUN' : 'REAL'}, período: ${allTime ? 'TODAS' : `últimos ${days} dias`}${force ? ', FORCE (sobrescreve)' : ''}`);
 
-  // Filtro: CHECKED_IN com mesas, sem faturamento ZIG ainda
+  // Filtro: CHECKED_IN com mesas
+  // Sem --force: só processa as que ainda estão null (comportamento original do job noturno)
+  // Com  --force: reprocessa tudo (útil pra aplicar regra nova retroativamente)
   const where: any = {
-    tables:          { not: null },
-    zigBillingCents: null,
-    status:          'CHECKED_IN',
+    tables: { not: null },
+    status: 'CHECKED_IN',
   };
+  if (!force) where.zigBillingCents = null;
 
   // Filtro por unidade (--unit=mane-west-plaza-sp)
   if (unitArg) {
@@ -132,8 +135,8 @@ async function main() {
       errors++;
     }
 
-    // Pausa entre chamadas pra não sobrecarregar a ZIG (sem rate limit documentado)
-    await sleep(500);
+    // MySQL é local/intra-Railway — pausa curta só pra não saturar conexão
+    await sleep(50);
   }
 
   log(`─────────────────────────────────────────`);
