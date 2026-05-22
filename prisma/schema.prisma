@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider  = "mysql"
-  url       = env("DATABASE_URL")
+  provider = "mysql"
+  url      = env("DATABASE_URL")
 }
 
 /**
@@ -76,9 +76,10 @@ model Unit {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  reservations Reservation[]
-  areas        Area[]
-  blocks       ReservationBlock[]
+  reservations    Reservation[]
+  areas           Area[]
+  blocks          ReservationBlock[]
+  recurringBlocks ReservationRecurringBlock[]
 
   @@index([name])
   @@index([isActive])
@@ -92,13 +93,14 @@ model Area {
   photoUrl String?
   isActive Boolean @default(true)
 
-  iconEmoji          String? @db.VarChar(16) // ex.: "🍺", "🎸", "🪑"
-  description        String? @db.Text
-  capacityAfternoon  Int?
-  capacityNight      Int?
+  iconEmoji         String? @db.VarChar(16) // ex.: "🍺", "🎸", "🪑"
+  description       String? @db.Text
+  capacityAfternoon Int?
+  capacityNight     Int?
 
-  reservations Reservation[]
-  blocks       ReservationBlock[]
+  reservations    Reservation[]
+  blocks          ReservationBlock[]
+  recurringBlocks ReservationRecurringBlock[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -134,20 +136,20 @@ model Reservation {
   reservationDate DateTime
   birthdayDate    DateTime?
 
-  phone String? @db.VarChar(32)
-  email String? @db.VarChar(200)
+  phone  String? @db.VarChar(32)
+  email  String? @db.VarChar(200)
   // CSV de mesas vinculadas (ex.: "321,322,323")
   tables String? @db.VarChar(512)
-  notes String? @db.Text
+  notes  String? @db.Text
 
   // Faturamento ZIG (preenchido ao consultar /v1/zig/billing)
-  zigBillingCents Int?      // total em centavos
+  zigBillingCents Int? // total em centavos
   zigBilledAt     DateTime? // quando foi consultado pela última vez
 
   // Faturamento Manezin (campos de teste — dados via API Manezin)
-  manezinBillingCents Int?      // total em centavos
+  manezinBillingCents Int? // total em centavos
   manezinBilledAt     DateTime? // quando foi consultado
-  manezinTxCount      Int?      // quantidade de transações encontradas
+  manezinTxCount      Int? // quantidade de transações encontradas
 
   utm_source   String? @db.VarChar(64)
   utm_medium   String? @db.VarChar(64)
@@ -213,24 +215,24 @@ model Guest {
  * Observação: MySQL não tem array escalar, por isso usamos Json para slots.
  */
 model ReservationBlock {
-  id        String                 @id @default(uuid()) @db.VarChar(36)
+  id String @id @default(uuid()) @db.VarChar(36)
 
-  unitId    String                 @db.VarChar(36)
-  unit      Unit                   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  unitId String @db.VarChar(36)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
 
-  areaId    String?                @db.VarChar(36)
-  area      Area?                  @relation(fields: [areaId], references: [id], onDelete: Cascade)
+  areaId String? @db.VarChar(36)
+  area   Area?   @relation(fields: [areaId], references: [id], onDelete: Cascade)
 
-  date      DateTime               // normalizado para 00:00:00 do dia (America/Sao_Paulo)
+  date DateTime // normalizado para 00:00:00 do dia (America/Sao_Paulo)
 
-  mode      ReservationBlockMode
-  period    ReservationBlockPeriod? // requerido quando mode = PERIOD
-  slots     Json?                  // requerido quando mode = SLOTS; ex.: ["12:00","12:30","18:00"]
+  mode   ReservationBlockMode
+  period ReservationBlockPeriod? // requerido quando mode = PERIOD
+  slots  Json? // requerido quando mode = SLOTS; ex.: ["12:00","12:30","18:00"]
 
-  reason    String?                @db.VarChar(255)
-  createdBy String?                @db.VarChar(64)
-  createdAt DateTime               @default(now())
-  updatedAt DateTime               @updatedAt
+  reason    String?  @db.VarChar(255)
+  createdBy String?  @db.VarChar(64)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([unitId, areaId, date, mode, period], map: "uniq_block_scope")
   @@index([unitId, date])
@@ -238,27 +240,55 @@ model ReservationBlock {
 }
 
 /**
+ * 🔁 Bloqueio recorrente por dia da semana (regras semanais)
+ * - dow: 0=Domingo, 1=Segunda, ..., 6=Sábado
+ * - fromTime/toTime: "HH:mm" — intervalo [fromTime, toTime) bloqueado
+ * - areaId NULL => aplica em todas as áreas da unidade
+ */
+model ReservationRecurringBlock {
+  id String @id @default(uuid()) @db.VarChar(36)
+
+  unitId String @db.VarChar(36)
+  unit   Unit   @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  areaId String? @db.VarChar(36)
+  area   Area?   @relation(fields: [areaId], references: [id], onDelete: Cascade)
+
+  dow      Int    @db.TinyInt
+  fromTime String @db.VarChar(5)
+  toTime   String @db.VarChar(5)
+
+  reason    String?  @db.VarChar(255)
+  createdBy String?  @db.VarChar(64)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([unitId, dow], map: "recblock_unit_dow_idx")
+  @@index([unitId, areaId, dow], map: "recblock_unit_area_dow_idx")
+}
+
+/**
  * 📋 Audit Log - Registro de todas as ações do sistema
  */
 model AuditLog {
-  id          String   @id @default(uuid()) @db.VarChar(36)
-  
-  action      String   @db.VarChar(50)    // CREATE, UPDATE, DELETE, CHECKIN, NO_SHOW, etc.
-  entity      String   @db.VarChar(50)    // Reservation, Unit, Area, User, Block
-  entityId    String?  @db.VarChar(36)    // ID do registro afetado
-  
-  userId      String?  @db.VarChar(36)    // Quem fez a ação
-  userName    String?  @db.VarChar(200)   // Nome do usuário (snapshot)
-  userEmail   String?  @db.VarChar(200)   // Email do usuário (snapshot)
-  
-  oldData     Json?                       // Estado anterior (para UPDATE/DELETE)
-  newData     Json?                       // Novo estado (para CREATE/UPDATE)
-  
-  ip          String?  @db.VarChar(45)    // IP do cliente
-  userAgent   String?  @db.VarChar(500)   // User-Agent
-  
-  createdAt   DateTime @default(now())
-  
+  id String @id @default(uuid()) @db.VarChar(36)
+
+  action   String  @db.VarChar(50) // CREATE, UPDATE, DELETE, CHECKIN, NO_SHOW, etc.
+  entity   String  @db.VarChar(50) // Reservation, Unit, Area, User, Block
+  entityId String? @db.VarChar(36) // ID do registro afetado
+
+  userId    String? @db.VarChar(36) // Quem fez a ação
+  userName  String? @db.VarChar(200) // Nome do usuário (snapshot)
+  userEmail String? @db.VarChar(200) // Email do usuário (snapshot)
+
+  oldData Json? // Estado anterior (para UPDATE/DELETE)
+  newData Json? // Novo estado (para CREATE/UPDATE)
+
+  ip        String? @db.VarChar(45) // IP do cliente
+  userAgent String? @db.VarChar(500) // User-Agent
+
+  createdAt DateTime @default(now())
+
   @@index([entity, entityId])
   @@index([userId])
   @@index([action])

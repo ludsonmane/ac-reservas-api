@@ -25,6 +25,8 @@ import { usersRouter } from './routes/users.routes';
 import { unitsPublicRouter } from './routes/units.public.routes';
 import reservationsGuestsRouter from './routes/reservations.guests.routes';
 import { blocksRouter } from './routes/blocks.routes';
+import { blocksRecurringRouter } from './routes/blocks.recurring.routes';
+import { blocksPublicRouter } from './routes/blocks.public.routes';
 import { auditRouter } from './routes/audit.routes';
 import { zigBillingRouter } from './routes/zig.billing.routes';
 import { apiKeyAuth } from './middlewares/apiKeyAuth';
@@ -204,6 +206,8 @@ export function buildServer() {
   app.use('/v1/reservations/public', reservationsPublicRouter);
   app.use('/v1/areas/public', areasPublicRouter);
   app.use('/v1/units/public', unitsPublicRouter);
+  app.use('/v1/blocks/public', blocksPublicRouter); // sem auth (consumido pelo front)
+  app.use('/v1/blocks/recurring', blocksRecurringRouter); // admin (requireAuth interno)
   app.use('/v1/blocks', blocksRouter); // continua público
 
   // 🔑 Rotas para integrações externas (token fixo via x-api-key)
