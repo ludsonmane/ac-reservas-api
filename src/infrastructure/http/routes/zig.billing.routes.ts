@@ -8,7 +8,7 @@
 import { Router } from 'express';
 import { requireAuth, requireRole } from '../middlewares/requireAuth';
 import { prisma } from '../../db/prisma';
-import { getZigBillingForReservation } from '../../../services/zig.service';
+import { getManezinBillingForReservation } from '../../../services/manezin.service';
 
 export const zigBillingRouter = Router();
 
@@ -60,25 +60,23 @@ zigBillingRouter.get(
         });
       }
 
-      if (!process.env.ZIG_MYSQL_URL) {
+      if (!process.env.MANEZIN_TOKEN) {
         return res.status(503).json({
           error: {
-            code:    'ZIG_NOT_CONFIGURED',
-            message: 'Integração ZIG não configurada. Defina ZIG_MYSQL_URL no Railway.',
+            code:    'MANEZIN_NOT_CONFIGURED',
+            message: 'Integração Manezin não configurada. Defina MANEZIN_TOKEN no Railway.',
           },
         });
       }
 
       const unitSlug = reservation.unitRef?.slug ?? null;
 
-      // 2. Busca faturamento na ZIG
-      // Pivot da janela: checkedInAt se houver, senão reservationDate
-      const billing = await getZigBillingForReservation(
+      // 2. Busca faturamento na Manezin (session detection)
+      const billing = await getManezinBillingForReservation(
         reservation.tables,
         reservation.reservationDate,
         unitSlug,
         lojaOverride,
-        reservation.checkedInAt,
       );
 
       // 3. Salva no banco (mesmo que seja R$ 0,00 — registra que foi consultado)
@@ -99,9 +97,9 @@ zigBillingRouter.get(
       });
 
     } catch (err: any) {
-      if (err?.message?.startsWith('[ZIG]')) {
+      if (err?.message?.startsWith('[manezin]') || err?.message?.startsWith('[ZIG]')) {
         return res.status(502).json({
-          error: { code: 'ZIG_ERROR', message: err.message },
+          error: { code: 'BILLING_ERROR', message: err.message },
         });
       }
       next(err);

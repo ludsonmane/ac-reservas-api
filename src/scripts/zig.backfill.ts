@@ -13,7 +13,7 @@
 
 import '../config/env'; // carrega as env vars
 import { prisma } from '../infrastructure/db/prisma';
-import { getZigBillingForReservation } from '../services/zig.service';
+import { getManezinBillingForReservation, type ManezinDayCache } from '../services/manezin.service';
 
 // ─── Flags de CLI ─────────────────────────────────────────────────────────────
 
@@ -38,8 +38,8 @@ function sleep(ms: number) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  if (!process.env.ZIG_MYSQL_URL) {
-    console.error('[backfill] ❌ ZIG_MYSQL_URL não configurada. Abortando.');
+  if (!process.env.MANEZIN_TOKEN) {
+    console.error('[backfill] ❌ MANEZIN_TOKEN não configurado. Abortando.');
     process.exit(1);
   }
 
@@ -91,6 +91,8 @@ async function main() {
   let ok     = 0;
   let errors = 0;
   let skipped = 0;
+  // Cache compartilhado por dia — evita refetch da Manezin pra múltiplas reservas do mesmo dia
+  const dayCache: ManezinDayCache = new Map();
 
   for (let i = 0; i < reservations.length; i++) {
     const r = reservations[i];
@@ -101,12 +103,13 @@ async function main() {
     let success = false;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const billing = await getZigBillingForReservation(
+        const billing = await getManezinBillingForReservation(
           r.tables!,
           r.reservationDate,
           r.unitRef?.slug ?? null,
           undefined,
           r.checkedInAt,
+          dayCache,
         );
 
         if (dryRun) {

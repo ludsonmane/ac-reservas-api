@@ -10,7 +10,8 @@
  */
 
 import { prisma } from '../infrastructure/db/prisma';
-import { getZigBillingForReservation, getPeriod } from './zig.service';
+import { getPeriod } from './zig.service';
+import { getManezinBillingForReservation, type ManezinDayCache } from './manezin.service';
 
 // ─── Logger ───────────────────────────────────────────────────────────────────
 
@@ -27,8 +28,8 @@ export async function processZigBillingForPeriod(
   targetDate: Date,
   period: 'AFTERNOON' | 'NIGHT',
 ): Promise<{ processed: number; errors: number }> {
-  if (!process.env.ZIG_MYSQL_URL) {
-    log('ZIG_MYSQL_URL não configurada — job ignorado.');
+  if (!process.env.MANEZIN_TOKEN) {
+    log('MANEZIN_TOKEN não configurado — job ignorado.');
     return { processed: 0, errors: 0 };
   }
 
@@ -62,15 +63,18 @@ export async function processZigBillingForPeriod(
 
   let processed = 0;
   let errors    = 0;
+  // Cache compartilhado: 1 fetch da Manezin por dia (vs. 1 por reserva)
+  const dayCache: ManezinDayCache = new Map();
 
   for (const r of filtered) {
     try {
-      const billing = await getZigBillingForReservation(
+      const billing = await getManezinBillingForReservation(
         r.tables!,
         r.reservationDate,
         r.unitRef?.slug ?? null,
         undefined,
         r.checkedInAt,
+        dayCache,
       );
 
       await prisma.reservation.update({
@@ -80,9 +84,6 @@ export async function processZigBillingForPeriod(
 
       log(`✅ ${r.id} → ${billing.totalValueBRL} (${billing.transactions.length} tx)`);
       processed++;
-
-      // Pausa para não sobrecarregar a ZIG
-      await new Promise((res) => setTimeout(res, 300));
     } catch (err: any) {
       logErr(`❌ ${r.id}`, err);
       errors++;
@@ -140,8 +141,8 @@ function scheduleDailyAt(hour: number, minute: number, job: () => Promise<void>)
 // ─── Registro ─────────────────────────────────────────────────────────────────
 
 export function startZigBillingJobs() {
-  if (!process.env.ZIG_MYSQL_URL) {
-    console.log('[zig-job] ZIG_MYSQL_URL não configurada — jobs não iniciados.');
+  if (!process.env.MANEZIN_TOKEN) {
+    console.log('[zig-job] MANEZIN_TOKEN não configurado — jobs não iniciados.');
     return;
   }
 

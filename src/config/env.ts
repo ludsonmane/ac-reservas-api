@@ -61,19 +61,18 @@ const envSchema = z.object({
   VITE_API_PREFIX:            z.string().optional(),
   NPM_CONFIG_CACHE:           z.string().optional(),
 
-  // ─── ZIG (faturamento por mesa) ───────────────────────────────────────────
-  // Fonte de dados: MySQL "Zig Mané DB FULL" (Railway), populado pelo cron zig-backfill.
-  // ZIG_MYSQL_URL: mysql://root:pass@host:port/railway
-  //   - prod (Railway): mysql://root:***@mysql-b648.railway.internal:3306/railway
-  //   - dev  (local):   mysql://root:***@yamanote.proxy.rlwy.net:55408/railway
-  // ZIG_LOJA_MAP: JSON {"<unitSlug>":"<loja_id UUID>"}, ex.:
-  //   {"bsb":"1d02dc84-...","aguas-claras":"5e63ab17-...","sp":"b0dbc86c-..."}
+  // ─── Faturamento por mesa — fonte canônica: API Manezin ─────────────────
+  // Substitui o MySQL "Zig Mané DB FULL" (cron de backfill quebrado em 2026-05).
+  MANEZIN_BASE_URL:   z.string().url().optional().default('https://manezin.com.br/api/externo'),
+  MANEZIN_TOKEN:      z.string().optional(),
+  BILLING_GAP_MIN:    z.coerce.number().optional().default(60),   // minutos: gap max p/ continuar sessão
+  BILLING_MAX_LATE_H: z.coerce.number().optional().default(8),    // horas: pivot pode atrasar até X após reserva
+
+  // Legado MySQL ZIG Full (mantido por compat — não usado pelo novo manezin.service.ts)
   ZIG_MYSQL_URL: z.string().optional(),
   ZIG_LOJA_MAP:  z.string().optional(),
-
-  // Legado (mantido por compat — não usado pelo novo zig.service.ts)
-  ZIG_TOKEN:    z.string().optional(),
-  ZIG_BASE_URL: z.string().url().optional().default('https://api.zigcore.com.br/integration'),
+  ZIG_TOKEN:     z.string().optional(),
+  ZIG_BASE_URL:  z.string().url().optional().default('https://api.zigcore.com.br/integration'),
 });
 
 const parsed = envSchema.safeParse(process.env);
