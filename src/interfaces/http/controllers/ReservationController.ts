@@ -158,6 +158,9 @@ export class ReservationController {
       // LEGADO (nome/slug da unidade) — ainda aceito
       unit: nonEmptyOrNull(b.unit),
 
+      // Mesas (CSV) — faltava no create; por isso só entravam na edição
+      tables: nonEmptyOrNull(b.tables),
+
       source: nonEmptyOrNull(b.source) ?? 'site',
     };
 
