@@ -39,6 +39,30 @@ function getPeriodFromDate(dt: Date): 'AFTERNOON' | 'NIGHT' {
   if (mins < 12 * 60) return 'AFTERNOON';
   return mins >= EVENING_CUTOFF_MIN ? 'NIGHT' : 'AFTERNOON';
 }
+
+// ── Fuso de Brasília (America/Sao_Paulo = UTC-3 fixo; Brasil sem horário de
+// verão desde 2019) ───────────────────────────────────────────────────────
+// O servidor (Railway) roda em UTC. Calcular o dia/período da reserva com
+// getHours()/getDate() (fuso do servidor) fazia uma reserva de 21:00 BRT
+// (= 00:00Z do dia seguinte) cair no DIA SEGUINTE e ser lida como TARDE —
+// furando bloqueios de dia/noite (incidente reserva J6VAGV, jogo do Brasil).
+// Estas funções derivam dia e período SEMPRE em horário de Brasília.
+const SP_OFFSET_MS = 3 * 60 * 60 * 1000;
+function spBlockDayRange(d: Date) {
+  const b = new Date(d.getTime() - SP_OFFSET_MS); // instante "deslocado" p/ ler componentes BRT via getUTC*
+  const ymd = `${b.getUTCFullYear()}-${String(b.getUTCMonth() + 1).padStart(2, '0')}-${String(b.getUTCDate()).padStart(2, '0')}`;
+  // blocos são gravados em meia-noite UTC do dia (ex.: '2026-06-19 00:00:00Z')
+  return {
+    dayStart: new Date(`${ymd}T00:00:00.000Z`),
+    dayEnd: new Date(`${ymd}T23:59:59.999Z`),
+  };
+}
+function getPeriodSP(d: Date): 'AFTERNOON' | 'NIGHT' {
+  const b = new Date(d.getTime() - SP_OFFSET_MS);
+  const mins = b.getUTCHours() * 60 + b.getUTCMinutes();
+  if (mins < 12 * 60) return 'AFTERNOON';
+  return mins >= EVENING_CUTOFF_MIN ? 'NIGHT' : 'AFTERNOON';
+}
 function periodWindow(dt: Date) {
   if (getPeriodFromDate(dt) === 'NIGHT') {
     return { from: at(dt, 17, 30), to: endOfDay(dt) };
@@ -373,11 +397,10 @@ router.post('/', async (req, res) => {
     // capacidade por período + bloqueios operacionais
     const dt = new Date(reservationDate);
 
-    // 1) checa se o dia/período está bloqueado
-    const dayStart = startOfDay(dt);
-    const dayEnd = endOfDay(dt);
+    // 1) checa se o dia/período está bloqueado (dia/período em horário de Brasília)
+    const { dayStart, dayEnd } = spBlockDayRange(dt);
     const currentPeriod =
-      getPeriodFromDate(dt) === 'AFTERNOON'
+      getPeriodSP(dt) === 'AFTERNOON'
         ? ReservationBlockPeriod.AFTERNOON
         : ReservationBlockPeriod.NIGHT;
 
@@ -669,11 +692,10 @@ router.patch('/by-code/:code', async (req, res) => {
         return res.status(404).json({ error: { code: 'AREA_NOT_FOUND', message: 'Área inexistente/inativa ou não pertence à unidade.' } });
       }
 
-      // bloqueios
+      // bloqueios (dia/período em horário de Brasília — ver spBlockDayRange)
       const dt = newDate;
-      const dayStart = startOfDay(dt);
-      const dayEnd = endOfDay(dt);
-      const currentPeriod = getPeriodFromDate(dt) === 'AFTERNOON' ? ReservationBlockPeriod.AFTERNOON : ReservationBlockPeriod.NIGHT;
+      const { dayStart, dayEnd } = spBlockDayRange(dt);
+      const currentPeriod = getPeriodSP(dt) === 'AFTERNOON' ? ReservationBlockPeriod.AFTERNOON : ReservationBlockPeriod.NIGHT;
       const blocks = await prisma.reservationBlock.findMany({
         where: {
           unitId: unit.id,
