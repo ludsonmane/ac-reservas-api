@@ -5,8 +5,9 @@ export type AuditAction =
   | 'CREATE' 
   | 'UPDATE' 
   | 'DELETE' 
-  | 'CHECKIN' 
-  | 'NO_SHOW' 
+  | 'CHECKIN'
+  | 'NO_SHOW'
+  | 'CANCEL'
   | 'QR_RENEW'
   | 'LOGIN'
   | 'LOGOUT';

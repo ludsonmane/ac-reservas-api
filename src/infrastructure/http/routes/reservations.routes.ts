@@ -781,6 +781,75 @@ reservationsRouter.post(
 );
 
 /* =========================================================================
+   🚫 Marcar como CANCELLED (reserva cancelada)
+   ========================================================================= */
+reservationsRouter.post(
+  '/:id/cancel',
+  requireAuth,
+  requireRole(['STAFF', 'ADMIN']),
+  async (req: any, res, next) => {
+    try {
+      const { id } = req.params;
+
+      const r = await prisma.reservation.findUnique({ where: { id } });
+      if (!r) return res.status(404).json({ error: 'Reserva não encontrada.' });
+
+      const oldStatus = r.status;
+
+      // Já está CANCELLED? Permite "desmarcar" voltando para AWAITING_CHECKIN
+      if (r.status === 'CANCELLED') {
+        const updated = await prisma.reservation.update({
+          where: { id },
+          data: { status: 'AWAITING_CHECKIN' },
+          select: {
+            id: true,
+            reservationCode: true,
+            status: true,
+            checkedInAt: true,
+            fullName: true,
+            phone: true,
+            people: true,
+            kids: true,
+            unitId: true,
+            areaId: true,
+            reservationDate: true,
+          },
+        });
+        await logFromRequest(req, 'CANCEL', 'Reservation', id, { status: oldStatus }, { status: updated.status });
+        notifyN8nNewContact({ type: 'reservation_cancel_undone', name: updated.fullName, email: null, phone: updated.phone ?? null, reservationId: updated.id, reservationCode: updated.reservationCode ?? null, reservationDate: updated.reservationDate.toISOString(), people: updated.people, kids: updated.kids ?? null, unitId: updated.unitId ?? null, areaId: updated.areaId ?? null, source: 'admin' });
+        return res.json(updated);
+      }
+
+      const updated = await prisma.reservation.update({
+        where: { id },
+        data: { status: 'CANCELLED' },
+        select: {
+          id: true,
+          reservationCode: true,
+          status: true,
+          checkedInAt: true,
+          fullName: true,
+          phone: true,
+          people: true,
+          kids: true,
+          unitId: true,
+          areaId: true,
+          reservationDate: true,
+        },
+      });
+
+      await logFromRequest(req, 'CANCEL', 'Reservation', id, { status: oldStatus }, { status: updated.status });
+
+      notifyN8nNewContact({ type: 'reservation_cancelled', name: updated.fullName, email: null, phone: updated.phone ?? null, reservationId: updated.id, reservationCode: updated.reservationCode ?? null, reservationDate: updated.reservationDate.toISOString(), people: updated.people, kids: updated.kids ?? null, unitId: updated.unitId ?? null, areaId: updated.areaId ?? null, source: 'admin' });
+
+      return res.json(updated);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+/* =========================================================================
    CRUD (Controller) — com enrich/validate no CREATE/UPDATE
    ========================================================================= */
 reservationsRouter.post(
