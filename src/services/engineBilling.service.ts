@@ -187,3 +187,85 @@ export function dailyUsdToBrlCents(
   }
   return Math.round(brl * 100);
 }
+
+// ─── Campanhas do engine (envios exatos por template/unidade) ────────────────
+// Usado p/ contar envios de "contexto de reserva" que SÃO campanha (aniversário,
+// reforço). A confirmação de reserva é transacional (n8n) e não entra aqui —
+// é estimada pelo nº de reservas no mane-api.
+
+export interface EngineCampaign {
+  template_name?: string;
+  sent?: number;
+  inbox_slug?: string;
+  started_at?: string | null;
+  created_at?: string | null;
+}
+
+let _campaignsCache: { at: number; data: EngineCampaign[] } | null = null;
+const CAMPAIGNS_TTL = 10 * 60 * 1000; // 10min
+
+export async function fetchEngineCampaigns(): Promise<EngineCampaign[]> {
+  if (_campaignsCache && Date.now() - _campaignsCache.at < CAMPAIGNS_TTL) {
+    return _campaignsCache.data;
+  }
+  const token = process.env.ENGINE_API_TOKEN;
+  if (!token) throw new Error('[engineBilling] ENGINE_API_TOKEN ausente');
+  const url = `${getBaseUrl()}/api/campaigns?limit=5000`;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: ctrl.signal });
+    if (!res.ok) throw new Error(`[engineBilling] campaigns HTTP ${res.status}`);
+    const data = (await res.json()) as EngineCampaign[];
+    const arr = Array.isArray(data) ? data : [];
+    _campaignsCache = { at: Date.now(), data: arr };
+    return arr;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Padrões de template por grupo de "contexto de reserva" (campanhas)
+export const CONTEXT_PATTERNS = {
+  aniversario: /(niver|anivers)/i,
+  reforco: /reforc/i,
+};
+
+export interface ContextSends {
+  aniversario: number;
+  reforco: number;
+}
+
+/**
+ * Agrega envios (sent) de campanhas de aniversário/reforço por slug de unidade,
+ * filtrando pelo período [fromMs, toMs] (data = started_at, fallback created_at).
+ */
+export function aggregateContextSends(
+  campaigns: EngineCampaign[],
+  fromMs: number,
+  toMs: number
+): Map<string, ContextSends> {
+  const out = new Map<string, ContextSends>();
+  for (const c of campaigns) {
+    const dateStr = c.started_at || c.created_at;
+    if (!dateStr) continue;
+    const t = new Date(dateStr).getTime();
+    if (isNaN(t) || t < fromMs || t > toMs) continue;
+
+    const slug = (c.inbox_slug || '').toLowerCase();
+    const name = c.template_name || '';
+    const sent = Number(c.sent) || 0;
+    if (!sent) continue;
+
+    const isAniv = CONTEXT_PATTERNS.aniversario.test(name);
+    const isReforco = CONTEXT_PATTERNS.reforco.test(name);
+    if (!isAniv && !isReforco) continue;
+
+    const cur = out.get(slug) || { aniversario: 0, reforco: 0 };
+    if (isAniv) cur.aniversario += sent;
+    else if (isReforco) cur.reforco += sent;
+    out.set(slug, cur);
+  }
+  return out;
+}

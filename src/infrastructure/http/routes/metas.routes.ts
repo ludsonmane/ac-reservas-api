@@ -30,7 +30,10 @@ import {
   fetchUsdBrlDaily,
   dailyUsdToBrlCents,
   toEngineSlug,
+  fetchEngineCampaigns,
+  aggregateContextSends,
   type EngineDailyUsage,
+  type ContextSends,
 } from '../../../services/engineBilling.service';
 
 export const metasRouter = Router();
@@ -129,24 +132,44 @@ metasRouter.get('/', requireAuth, requireRole(['ADMIN']), async (req, res, next)
     // ── engine: envios + gasto por WABA (1 chamada cobrindo todas as unidades) ──
     const startSec = Math.floor(from.getTime() / 1000);
     const endSec = Math.floor(to.getTime() / 1000);
-    type SlugUsage = { messages: number; costUsd: number; daily: EngineDailyUsage[] };
+    type SlugUsage = {
+      messages: number;
+      costUsd: number;
+      daily: EngineDailyUsage[];
+      // breakdown por categoria — base do preço unitário (confirmação=UTILITY, aniversário/reforço=MARKETING)
+      utilityCostUsd: number;
+      utilityVolume: number;
+      marketingCostUsd: number;
+      marketingVolume: number;
+    };
+    const newSlugUsage = (): SlugUsage => ({
+      messages: 0, costUsd: 0, daily: [],
+      utilityCostUsd: 0, utilityVolume: 0, marketingCostUsd: 0, marketingVolume: 0,
+    });
     const usageBySlug = new Map<string, SlugUsage>();
     let fxRate = 0; // cotação spot (fallback p/ dias sem série diária)
     let dailyFx = new Map<string, number>(); // cotação histórica por dia (dia do disparo)
+    let contextBySlug = new Map<string, ContextSends>(); // envios aniversário/reforço (campanha)
     let engineError: string | null = null;
     try {
-      const [usage, fxDaily] = await Promise.all([
+      const [usage, fxDaily, campaigns] = await Promise.all([
         fetchEngineUsage(startSec, endSec),
         fetchUsdBrlDaily(startSec, endSec),
+        fetchEngineCampaigns().catch(() => []),
       ]);
       dailyFx = fxDaily;
       fxRate = usage.fx?.rate_usd_brl || 0;
+      contextBySlug = aggregateContextSends(campaigns, from.getTime(), to.getTime());
       for (const w of usage.wabas) {
         const slug = (w.slug || '').toLowerCase();
-        const prev = usageBySlug.get(slug) || { messages: 0, costUsd: 0, daily: [] };
+        const prev = usageBySlug.get(slug) || newSlugUsage();
         prev.messages += Number(w.total_messages) || 0;
         prev.costUsd += Number(w.total_cost) || 0;
         if (Array.isArray(w.daily)) prev.daily.push(...w.daily);
+        const util = w.breakdown?.UTILITY;
+        const mkt = w.breakdown?.MARKETING;
+        if (util) { prev.utilityCostUsd += Number(util.cost) || 0; prev.utilityVolume += Number(util.volume) || 0; }
+        if (mkt) { prev.marketingCostUsd += Number(mkt.cost) || 0; prev.marketingVolume += Number(mkt.volume) || 0; }
         usageBySlug.set(slug, prev);
       }
     } catch (e: any) {
@@ -168,7 +191,8 @@ metasRouter.get('/', requireAuth, requireRole(['ADMIN']), async (req, res, next)
       const ticketPorPessoaCents =
         pessoasFaturadas > 0 ? Math.round(faturamentoCents / pessoasFaturadas) : 0;
 
-      const eng = usageBySlug.get(toEngineSlug(u.slug, u.name));
+      const engSlug = toEngineSlug(u.slug, u.name);
+      const eng = usageBySlug.get(engSlug);
       const envios = eng?.messages ?? null;
       const gastoWhatsappUsd = eng ? Number(eng.costUsd.toFixed(4)) : null;
       // Converte USD→BRL pela cotação do dia de cada disparo (carry-back em dias
@@ -177,6 +201,40 @@ metasRouter.get('/', requireAuth, requireRole(['ADMIN']), async (req, res, next)
         ? dailyUsdToBrlCents(eng.daily, dailyFx, fxRate) ??
           (fxRate > 0 ? Math.round(eng.costUsd * fxRate * 100) : null)
         : null;
+
+      // ── Gasto de "contexto de reserva" (estimativa) ───────────────────────────
+      // Confirmação (UTILITY, transacional) ≈ 1 por reserva criada.
+      // Aniversário + Reforço (MARKETING, campanha) = envios exatos do engine.
+      // Custo = envios × preço unitário da categoria (cost/volume do billing).
+      // Custo = fração dos envios do grupo dentro da categoria × custo da categoria
+      // (teto de 100% — o gasto de contexto nunca ultrapassa o custo real da categoria).
+      const ctx = contextBySlug.get(engSlug) || { aniversario: 0, reforco: 0 };
+      const confirmacaoEnvios = total; // estimativa: 1 confirmação por reserva
+      const anivReforcoEnvios = ctx.aniversario + ctx.reforco;
+      const confirmUsd =
+        eng && eng.utilityVolume > 0
+          ? Math.min(confirmacaoEnvios / eng.utilityVolume, 1) * eng.utilityCostUsd
+          : 0;
+      const anivReforcoUsd =
+        eng && eng.marketingVolume > 0
+          ? Math.min(anivReforcoEnvios / eng.marketingVolume, 1) * eng.marketingCostUsd
+          : 0;
+      const ctxUsd = confirmUsd + anivReforcoUsd;
+      // BRL do contexto = fração do custo total (ctxUsd/costUsd) aplicada ao gasto
+      // total já convertido — mesmo câmbio do WA e garante contexto ≤ total.
+      const reservaContextoGastoCents =
+        eng && eng.costUsd > 0 && gastoWhatsappCents != null
+          ? Math.round((ctxUsd / eng.costUsd) * gastoWhatsappCents)
+          : eng && fxRate > 0
+          ? Math.round(ctxUsd * fxRate * 100)
+          : null;
+      const reservaContexto = {
+        confirmacaoEnvios,
+        aniversarioEnvios: ctx.aniversario,
+        reforcoEnvios: ctx.reforco,
+        envios: confirmacaoEnvios + ctx.aniversario + ctx.reforco,
+        gastoEstimadoCents: reservaContextoGastoCents,
+      };
 
       return {
         unitId: u.id,
@@ -194,6 +252,7 @@ metasRouter.get('/', requireAuth, requireRole(['ADMIN']), async (req, res, next)
         cancelamentoPct: total > 0 ? Number(((canceladas / total) * 100).toFixed(1)) : 0,
         checkins,
         checkinsSemMesa,
+        reservaContexto,
       };
     });
 
@@ -224,6 +283,15 @@ metasRouter.get('/', requireAuth, requireRole(['ADMIN']), async (req, res, next)
         totReservas > 0 ? Number(((totCanceladas / totReservas) * 100).toFixed(1)) : 0,
       checkins: sum('checkins'),
       checkinsSemMesa: sum('checkinsSemMesa'),
+      reservaContexto: {
+        confirmacaoEnvios: unidades.reduce((a, u) => a + u.reservaContexto.confirmacaoEnvios, 0),
+        aniversarioEnvios: unidades.reduce((a, u) => a + u.reservaContexto.aniversarioEnvios, 0),
+        reforcoEnvios: unidades.reduce((a, u) => a + u.reservaContexto.reforcoEnvios, 0),
+        envios: unidades.reduce((a, u) => a + u.reservaContexto.envios, 0),
+        gastoEstimadoCents: unidades.some((u) => u.reservaContexto.gastoEstimadoCents != null)
+          ? unidades.reduce((a, u) => a + (u.reservaContexto.gastoEstimadoCents || 0), 0)
+          : null,
+      },
     };
 
     // só é "histórico" se houve série diária (do engine) E cotação por dia (AwesomeAPI)
