@@ -29,6 +29,7 @@ import { blocksRecurringRouter } from './routes/blocks.recurring.routes';
 import { blocksPublicRouter } from './routes/blocks.public.routes';
 import { auditRouter } from './routes/audit.routes';
 import { zigBillingRouter } from './routes/zig.billing.routes';
+import { metasRouter } from './routes/metas.routes';
 import { apiKeyAuth } from './middlewares/apiKeyAuth';
 import { requireAuth } from './middlewares/requireAuth'; // 🔥 IMPORTA AQUI
 
@@ -230,6 +231,7 @@ export function buildServer() {
   app.use('/v1/users', usersRouter);
   app.use('/v1/audit', auditRouter); // logs de auditoria
   app.use('/v1/zig', zigBillingRouter); // faturamento ZIG por reserva
+  app.use('/v1/metas', metasRouter); // dados de metas (admin) — reservas x envios/gasto WhatsApp
 
   // Swagger
   const openapiPath = path.resolve(__dirname, '..', '..', '..', 'openapi.json');
