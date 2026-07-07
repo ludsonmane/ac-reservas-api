@@ -10,6 +10,10 @@ import {
   getEarliestBookable,
   isBookableNow,
 } from '../../../domain/booking-window';
+import {
+  getMinPeople,
+  LARGE_GROUP_MESSAGE,
+} from '../../../domain/min-party-rule';
 
 import {
   ReservationType,
@@ -373,6 +377,20 @@ router.post('/', async (req, res) => {
     // capacidade por período + bloqueios operacionais
     const dt = new Date(reservationDate);
 
+    // mínimo de pessoas por horário (regra Águas Claras: sex noite / sáb dia / dom almoço)
+    {
+      const minPeople = getMinPeople(dt, unit.name);
+      if (peopleNum + kidsNum < minPeople) {
+        return res.status(422).json({
+          error: {
+            code: 'MIN_PEOPLE_REQUIRED',
+            message: LARGE_GROUP_MESSAGE,
+            minPeople,
+          },
+        });
+      }
+    }
+
     // 1) checa se o dia/período está bloqueado
     const dayStart = startOfDay(dt);
     const dayEnd = endOfDay(dt);
@@ -686,6 +704,18 @@ router.patch('/by-code/:code', async (req, res) => {
       });
       if (blocks.length > 0) {
         return res.status(409).json({ error: { code: 'BLOCKED_DAY', message: 'Reservas bloqueadas para esta data/período.' } });
+      }
+
+      // mínimo de pessoas por horário (regra Águas Claras)
+      const minPeople = getMinPeople(dt, unit.name);
+      if (newPeople + newKids < minPeople) {
+        return res.status(422).json({
+          error: {
+            code: 'MIN_PEOPLE_REQUIRED',
+            message: LARGE_GROUP_MESSAGE,
+            minPeople,
+          },
+        });
       }
 
       // capacidade considerando crédito da reserva atual (mesma area/data/periodo)
